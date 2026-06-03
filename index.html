@@ -253,8 +253,7 @@
 </head>
 <body>
 <header>
-  <h1>🎾 テニス対戦組み合わせ & コート割当</h1>
-  <div class="sub">チーム対抗・総当たり / 自動コート割当 / スコア集計 ― データは自動保存されます</div>
+  <h1>🎾 対戦割当・結果登録</h1>
 </header>
 <nav>
   <button data-tab="setup" class="active">① 設定・メンバー</button>
@@ -359,7 +358,7 @@
       </div>
       <div class="panel" id="addMatchPanel" style="display:none">
         <h2>追加の対戦を作る</h2>
-        <p class="muted small" style="margin-top:0">全試合終了後などに、<b>別チーム・同種別</b>の組み合わせで1試合だけ追加します。作成すると<b>空きコートへすぐ割り当て</b>ます（空きが無ければ残試合一覧へ）。勝敗は<b>成績・順位・対戦結果表に反映</b>されます。</p>
+        <p class="muted small" style="margin-top:0">全試合終了後などに、<b>別チーム・同種別</b>の組み合わせで1試合だけ追加します。作成すると<b>空きコートへすぐ割り当て</b>ます（空きが無ければ残試合一覧へ）。勝敗は<b>成績・順位・対戦結果表に反映</b>されます。追加した対戦は、残試合一覧・コート・完了一覧の <b>🗑</b> で削除できます。</p>
         <div class="row" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
           <label class="fld" style="flex:1;min-width:150px;margin:0">エントリーA
             <select id="addA" onchange="fillAddB()" style="width:100%"></select>
@@ -370,6 +369,7 @@
           </label>
           <button class="btn" onclick="addExtraMatch()">＋ 追加</button>
         </div>
+        <div id="addMsg" class="small" style="margin-top:8px;color:var(--green);font-weight:700;min-height:1.2em"></div>
       </div>
       <div class="panel">
         <h2>残試合一覧 <span class="badge" id="pendingBadge"></span></h2>
@@ -1041,6 +1041,7 @@ function renderBoard(){
           </div>
           <button class="btn" style="width:100%" onclick="finalizeMatch('${m.id}')">✓ 結果を登録して次の試合へ</button>
           ${manual?`<button class="btn ghost" style="width:100%;margin-top:6px" onclick="unassignMatch('${m.id}')">↩ 未割り当てに戻す</button>`:""}
+          ${m.extra?`<button class="btn ghost" style="width:100%;margin-top:6px" onclick="delMatch('${m.id}')">🗑 この追加対戦を削除</button>`:""}
         </div>
       </div>`;
     }
@@ -1107,6 +1108,7 @@ function renderBoard(){
         <span class="pill ${m.type==='singles'?'s':'d'}">${typeBadge(m.type)}</span>${m.extra?'<span class="pill" style="background:#fde68a;color:#92400e;border-color:#fde68a">追加</span>':''}
         <span class="grow">${esc(entryLabel(a))} <span class="muted small">(${esc(entryTeamName(a))})</span> <span class="muted">vs</span> ${esc(entryLabel(b))} <span class="muted small">(${esc(entryTeamName(b))})</span></span>
         ${blocked?'<span class="muted small">出場中</span>':''}
+        ${m.extra && !IS_VIEWER ? `<button class="icon" title="この追加対戦を削除" onclick="delMatch('${m.id}')">🗑</button>`:''}
       </div>`;
     }).join("");
   }
@@ -1134,6 +1136,7 @@ function renderBoard(){
           <span style="${w===-1?'color:var(--green);font-weight:700':''}">${w===-1?'🏆 ':''}${esc(entryLabel(b))}</span></span>
         ${scoreCell}
         ${IS_VIEWER?"":`<button class="btn ghost small" style="padding:6px 10px" onclick="undoMatch('${m.id}')">↩ 戻す</button>`}
+        ${m.extra && !IS_VIEWER ? `<button class="icon" title="この追加対戦を削除" onclick="delMatch('${m.id}')">🗑</button>`:''}
       </div>`;
     }).join("");
   }
@@ -1176,6 +1179,13 @@ function firstEmptyCourtFor(m){
   slots.sort((a,b)=>{ const la=load[physCourtOf(a)]||0, lb=load[physCourtOf(b)]||0; return la-lb || a-b; });
   return slots[0];
 }
+let _addMsgTimer=null;
+function showAddMsg(text){
+  const el=document.getElementById("addMsg"); if(!el) return;
+  el.textContent=text;
+  if(_addMsgTimer) clearTimeout(_addMsgTimer);
+  _addMsgTimer=setTimeout(()=>{ const e=document.getElementById("addMsg"); if(e) e.textContent=""; }, 6000);
+}
 function addExtraMatch(){
   const selA=document.getElementById("addA"), selB=document.getElementById("addB");
   const a=entryById(selA&&selA.value), b=entryById(selB&&selB.value);
@@ -1186,15 +1196,27 @@ function addExtraMatch(){
   const m={id:uid("m"), type:a.type, aId:a.id, bId:b.id, extra:true,
            status:"pending", court:null, doneSeq:null, scoreA:"", scoreB:""};
   state.matches.push(m);
+  const label=`${entryLabel(a)} vs ${entryLabel(b)}`;
   if(!cloudAdmin()){                                         // local: place immediately
     const slot=firstEmptyCourtFor(m);                        // 作成と同時に空きコートへ
     if(slot){ m.status='playing'; m.court=slot; }
     autoFillIfNeeded();                                      // 自動モードなら残りの空きも埋める
     save(); renderBoard(); renderResult();
-    if(!slot && m.status==='pending'){ alert("すぐに割り当てできなかったため、残試合一覧に追加しました。\n（空きコートが無い／選手が出場中のため。コートが空くと割り当てられます）"); }
+    showAddMsg(`✓「${label}」を追加しました（${slot?'コートへ割当':'残試合一覧へ'}）`);
   } else {                                                   // cloud: the push transaction assigns the court
     save(); renderBoard(); renderResult(); pushNow();
+    showAddMsg(`✓「${label}」を追加しました（残試合一覧／空きコートに表示されます）`);
   }
+}
+/* delete an ADDED (extra) match — round-robin matches cannot be removed here */
+function delMatch(id){
+  const m=state.matches.find(x=>x.id===id); if(!m) return;
+  if(!m.extra){ alert("通常の対戦は削除できません（「追加の対戦」だけ削除できます）。"); return; }
+  const a=entryById(m.aId), b=entryById(m.bId);
+  if(!confirm(`追加対戦「${entryLabel(a)} vs ${entryLabel(b)}」を削除します。よろしいですか？`)) return;
+  state.matches=state.matches.filter(x=>x.id!==id);
+  save(); renderBoard(); renderResult();
+  if(cloudAdmin()) cloudOverwrite();                         // structural change → replace whole doc
 }
 
 /* store a typed score without finalizing (keeps it across reload / re-render) */
