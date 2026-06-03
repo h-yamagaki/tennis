@@ -448,7 +448,8 @@ if(cloudEnabled){
   }
   catch(e){ console.error("Firebase init failed", e); }
 }
-let _pushTimer=null, _unsub=null;
+let _pushTimer=null, _unsub=null, _baseline=null, _pendingRender=false;
+function cloudAdmin(){ return cloudEnabled && !IS_VIEWER; }   // admin connected to the cloud
 const COLORS = ["#2563eb","#dc2626","#16a34a","#d97706","#7c3aed","#0891b2","#db2777","#65a30d","#9333ea","#0d9488"];
 /* per-team background tints for the result matrix: h = header, c = cell band */
 const TINT = [
@@ -483,6 +484,7 @@ function defaultState(){
            matches:[], clock:0, generated:false };
 }
 let state = load() || defaultState();
+_baseline = JSON.stringify(state);            // last state known to match the cloud (for 3-way merge)
 
 function load(){ try{ const s=localStorage.getItem(KEY); return s?JSON.parse(s):null; }catch(e){ return null; } }
 function save(){ localStorage.setItem(KEY, JSON.stringify(state)); if(cloudEnabled && !IS_VIEWER) cloudPushDebounced(); }
@@ -685,7 +687,7 @@ function importData(ev){
       if(!data||!Array.isArray(data.teams)||!Array.isArray(data.entries)) throw new Error("invalid");
       if(!confirm("現在のデータを、読み込むファイルの内容で置き換えます。よろしいですか？")){ ev.target.value=""; return; }
       state=Object.assign(defaultState(), data);
-      save(); renderSetup(); renderBoard(); renderResult(); goTab("setup");
+      save(); if(cloudAdmin()) cloudOverwrite(); renderSetup(); renderBoard(); renderResult(); goTab("setup");
       alert("読み込みました。");
     }catch(e){
       alert("読み込みに失敗しました。正しいバックアップファイル（このアプリで書き出したJSON）を選んでください。");
@@ -774,9 +776,10 @@ function onGenerate(){
   }
   buildMatches();
   state.clock = 0;
-  autoFillIfNeeded();    // auto mode fills every court; manual mode waits for you
+  if(state.assignMode!=='manual') fillCourts();   // single-user structural op → fill now
   state.generated = true;
   save();
+  if(cloudAdmin()) cloudOverwrite();               // structural: replace the whole cloud doc
   goTab("board");
 }
 
@@ -883,12 +886,15 @@ function fillCourts(){
   }
 }
 /* fill empty courts only when the assignment mode is automatic */
-function autoFillIfNeeded(){ if(state.assignMode!=='manual') fillCourts(); }
+/* In cloud (multi-admin) mode, court auto-fill is done authoritatively inside the
+   push transaction (serialized → no double-booking), so we SKIP the local optimistic
+   fill here. Local-only mode keeps filling immediately. */
+function autoFillIfNeeded(){ if(state.assignMode!=='manual' && !cloudAdmin()) fillCourts(); }
 
 /* switch auto/manual; entering auto immediately fills the empty courts */
 function setAssignMode(mode){
   state.assignMode = (mode==='manual') ? 'manual' : 'auto';
-  if(state.assignMode==='auto') fillCourts();
+  if(state.assignMode==='auto' && !cloudAdmin()) fillCourts();   // cloud: filled in the push transaction
   save(); renderBoard();
 }
 
@@ -1177,11 +1183,15 @@ function addExtraMatch(){
   const m={id:uid("m"), type:a.type, aId:a.id, bId:b.id, extra:true,
            status:"pending", court:null, doneSeq:null, scoreA:"", scoreB:""};
   state.matches.push(m);
-  const slot=firstEmptyCourtFor(m);                          // 作成と同時に空きコートへ
-  if(slot){ m.status='playing'; m.court=slot; }
-  autoFillIfNeeded();                                        // 自動モードなら残りの空きも埋める
-  save(); renderBoard(); renderResult();
-  if(!slot && m.status==='pending'){ alert("すぐに割り当てできなかったため、残試合一覧に追加しました。\n（空きコートが無い／選手が出場中のため。コートが空くと割り当てられます）"); }
+  if(!cloudAdmin()){                                         // local: place immediately
+    const slot=firstEmptyCourtFor(m);                        // 作成と同時に空きコートへ
+    if(slot){ m.status='playing'; m.court=slot; }
+    autoFillIfNeeded();                                      // 自動モードなら残りの空きも埋める
+    save(); renderBoard(); renderResult();
+    if(!slot && m.status==='pending'){ alert("すぐに割り当てできなかったため、残試合一覧に追加しました。\n（空きコートが無い／選手が出場中のため。コートが空くと割り当てられます）"); }
+  } else {                                                   // cloud: the push transaction assigns the court
+    save(); renderBoard(); renderResult(); pushNow();
+  }
 }
 
 /* store a typed score without finalizing (keeps it across reload / re-render) */
@@ -1211,6 +1221,7 @@ function finalizeMatch(id){
   m.status='done'; m.doneSeq=++state.clock;
   autoFillIfNeeded();
   save(); renderBoard(); renderResult();
+  if(cloudAdmin()) pushNow();                 // commit + authoritative court-fill right away
 }
 
 /* send a finished match back to the queue (e.g. recorded by mistake) */
@@ -1221,14 +1232,16 @@ function undoMatch(id){
   state.clock=state.matches.reduce((mx,x)=>(x.status==='done'&&x.doneSeq>mx)?x.doneSeq:mx,0);
   autoFillIfNeeded();
   save(); renderBoard(); renderResult();
+  if(cloudAdmin()) pushNow();
 }
 
 function clearScores(){
   if(!confirm("すべての試合結果を消去し、コート割当を最初からやり直します。よろしいですか？")) return;
   state.matches.forEach(m=>{ m.status='pending'; m.court=null; m.doneSeq=null; m.scoreA=""; m.scoreB=""; });
   state.clock=0;
-  autoFillIfNeeded();
+  if(state.assignMode!=='manual') fillCourts();    // single-user reset → fill now
   save(); renderBoard(); renderResult();
+  if(cloudAdmin()) cloudOverwrite();
 }
 
 /* ====================================================== */
@@ -1558,7 +1571,7 @@ function goTab(name){
 }
 function resetAll(){
   if(!confirm("すべてのチーム・エントリー・対戦表・スコアを削除して初期化します。よろしいですか？")) return;
-  state=defaultState(); save(); renderSetup(); renderBoard(); renderResult(); goTab("setup");
+  state=defaultState(); save(); if(cloudAdmin()) cloudOverwrite(); renderSetup(); renderBoard(); renderResult(); goTab("setup");
 }
 
 /* ====================================================== */
@@ -1571,12 +1584,75 @@ function setCloudStatus(cls,text){
 }
 function eventDoc(){ return db.collection("events").doc(ROOM); }
 function cloudPushDebounced(){ if(_pushTimer) clearTimeout(_pushTimer); _pushTimer=setTimeout(cloudPush,1200); }
+function pushNow(){ if(_pushTimer){ clearTimeout(_pushTimer); _pushTimer=null; } cloudPush(); }   // immediate (e.g. after finalize)
+
+/* 3-way merge: take the latest REMOTE, then overlay only what THIS device changed
+   since the last sync (vs _baseline). Lets multiple admins edit different matches
+   at once without clobbering each other. Same match → last writer wins. */
+function mergeStates(baseStr, local, remote){
+  let base=null; try{ base=JSON.parse(baseStr||"null"); }catch(e){}
+  const clone=o=>JSON.parse(JSON.stringify(o));
+  const str=o=>JSON.stringify(o);
+  const N=clone(remote);
+  const bById={},lById={},rById={};
+  ((base&&base.matches)||[]).forEach(m=>bById[m.id]=m);
+  (local.matches||[]).forEach(m=>lById[m.id]=m);
+  (remote.matches||[]).forEach(m=>rById[m.id]=m);
+  const ids=new Set([...Object.keys(lById),...Object.keys(rById)]);
+  const matches=[];
+  ids.forEach(id=>{
+    const l=lById[id], r=rById[id], b=bById[id];
+    const localChanged = l && (!b || str(l)!==str(b));   // this device added/changed it
+    if(localChanged) matches.push(l);
+    else if(r) matches.push(r);                          // keep others' / unchanged remote
+    // else: local had it unchanged & remote removed it → drop
+  });
+  N.matches=matches;
+  ["teams","entries","courtCount","title","assignMode","courtMode","generated"].forEach(k=>{
+    const lc = base ? str(local[k])!==str(base[k]) : true;
+    N[k] = lc ? clone(local[k]) : remote[k];
+  });
+  N.clock = Math.max(local.clock||0, remote.clock||0);
+  N.seq   = Math.max(local.seq||1,  remote.seq||1);
+  return N;
+}
 async function cloudPush(){
   if(!db || IS_VIEWER) return;
   try{
-    await eventDoc().set({ data: state, updatedAt: Date.now() });
+    let out=null;
+    await db.runTransaction(async (tx)=>{
+      const ref=eventDoc();
+      const snap=await tx.get(ref);
+      const remote=(snap.exists && snap.data() && snap.data().data) ? Object.assign(defaultState(), snap.data().data) : null;
+      const merged = remote ? mergeStates(_baseline, state, remote) : JSON.parse(JSON.stringify(state));
+      // authoritative court auto-fill on the merged (latest) state. The transaction
+      // serializes concurrent writers, so two devices never double-book a court.
+      // (No await between the swap and restore → global `state` is safe.)
+      const saved=state; state=merged;
+      if(state.assignMode!=='manual') fillCourts();
+      out=state; state=saved;
+      tx.set(ref, { data: out, updatedAt: Date.now() });
+    });
+    if(out){
+      state=out; _baseline=JSON.stringify(out);
+      localStorage.setItem(KEY, JSON.stringify(out));
+      renderFromRemote();
+    }
     setCloudStatus("on","☁ 保存済み");
-  }catch(e){ setCloudStatus("off","⚠ 同期失敗"); }
+  }catch(e){ setCloudStatus("off","⚠ 同期失敗（再試行中）"); cloudPushDebounced(); }
+}
+/* structural changes (generate / reset / clear / import) replace the whole doc */
+async function cloudOverwrite(){
+  if(!db || IS_VIEWER) return;
+  if(_pushTimer){ clearTimeout(_pushTimer); _pushTimer=null; }
+  try{ await eventDoc().set({ data: state, updatedAt: Date.now() }); _baseline=JSON.stringify(state); setCloudStatus("on","☁ 保存済み"); }
+  catch(e){ setCloudStatus("off","⚠ 同期失敗"); }
+}
+/* re-render after a remote update, but don't yank a score field the user is typing in */
+function renderFromRemote(){
+  const a=document.activeElement;
+  if(a && a.tagName==='INPUT' && (String(a.id).indexOf('sa_')===0 || String(a.id).indexOf('sb_')===0)){ _pendingRender=true; return; }
+  renderSetup(); renderBoard(); renderResult();
 }
 async function cloudPullOnce(){               // admin: load an existing event once on open
   if(!db) return false;
@@ -1588,8 +1664,25 @@ async function cloudPullOnce(){               // admin: load an existing event o
 }
 function applyRemote(d){
   state=Object.assign(defaultState(), d);
+  _baseline=JSON.stringify(state);
   renderSetup(); renderBoard(); renderResult();
   if(IS_VIEWER) setCloudStatus("view","👁 閲覧モード（自動更新）");
+}
+/* admins also subscribe live, merging other admins' changes into local state */
+function subscribeAdmin(){
+  if(!db || _unsub) return;
+  _unsub = eventDoc().onSnapshot(
+    snap=>{
+      if(!snap.exists) return;
+      const d=snap.data(); if(!d || !d.data) return;
+      const remote=Object.assign(defaultState(), d.data);
+      state=mergeStates(_baseline, state, remote);   // keep our un-pushed edits, take theirs
+      _baseline=JSON.stringify(remote);
+      localStorage.setItem(KEY, JSON.stringify(state));
+      renderFromRemote();
+    },
+    err=>{ setCloudStatus("off","⚠ 同期エラー"); }
+  );
 }
 function subscribeViewer(){                    // realtime: pushes current + every change
   if(!db || _unsub) return;
@@ -1641,11 +1734,13 @@ async function initCloud(){
   if(!got){
     // brand-new room → start as a fresh event (do NOT carry over the previous one)
     state=defaultState();
+    _baseline=JSON.stringify(state);
     localStorage.setItem(KEY, JSON.stringify(state));
     renderSetup(); renderBoard(); renderResult();
-    await cloudPush();
+    await cloudOverwrite();
   }
-  setCloudStatus("on","☁ 管理モード（自動保存）");
+  subscribeAdmin();                          // live-sync with other admin devices
+  setCloudStatus("on","☁ 管理モード（自動保存・複数人同時OK）");
 }
 
 /* admin's share panel (viewer link), or setup instructions if not configured */
@@ -1729,7 +1824,11 @@ renderSetup();
 renderBoard();
 renderResult();
 applyExportButtons();
+// apply any remote update that was deferred while the user was typing a score
+document.addEventListener("focusout", ()=>{ if(_pendingRender){ _pendingRender=false; setTimeout(renderFromRemote,0); } });
 initCloud();
 </script>
 <!-- holds the cross table while printing it alone (A4 landscape); hidden on screen -->
 <div id="matrixPrintArea"></div>
+</body>
+</html>
