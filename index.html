@@ -51,6 +51,7 @@
   .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;font-weight:700}
   .pill.s{background:#ecfdf5;color:#047857}
   .pill.d{background:#fef3c7;color:#b45309}
+  .tchip{display:inline-block;padding:3px 9px;border-radius:6px;font-weight:700;color:#111}  /* team-colored name chip */
   .empty{color:var(--muted);text-align:center;padding:30px;border:2px dashed var(--line);border-radius:10px}
 
   /* team cards */
@@ -1106,7 +1107,7 @@ function renderBoard(){
       return `<div class="plist-row ${blocked?'blocked':''}">
         <span class="num">${i+1}</span>
         <span class="pill ${m.type==='singles'?'s':'d'}">${typeBadge(m.type)}</span>${m.extra?'<span class="pill" style="background:#fde68a;color:#92400e;border-color:#fde68a">追加</span>':''}
-        <span class="grow">${esc(entryLabel(a))} <span class="muted small">(${esc(entryTeamName(a))})</span> <span class="muted">vs</span> ${esc(entryLabel(b))} <span class="muted small">(${esc(entryTeamName(b))})</span></span>
+        <span class="grow"><span class="tchip" style="background:${lightTint(teamColor(a.teamId))}" title="${esc(entryTeamName(a))}">${esc(entryLabel(a))}</span> <span class="muted">vs</span> <span class="tchip" style="background:${lightTint(teamColor(b.teamId))}" title="${esc(entryTeamName(b))}">${esc(entryLabel(b))}</span></span>
         ${blocked?'<span class="muted small">出場中</span>':''}
         ${m.extra && !IS_VIEWER ? `<button class="icon" title="この追加対戦を削除" onclick="delMatch('${m.id}')">🗑</button>`:''}
       </div>`;
