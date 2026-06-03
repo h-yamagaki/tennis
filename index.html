@@ -983,6 +983,10 @@ function renderBoard(){
   const rem={}; pending.forEach(m=>{ rem[m.aId]=(rem[m.aId]||0)+1; rem[m.bId]=(rem[m.bId]||0)+1; });
   const lastEnd=computeLastEnd(); const clock=state.clock||0;
   const rest=e=>clock-(lastEnd[e]===undefined?-1e9:lastEnd[e]);
+  // team & entry order (earlier team/entry first) — used to put the earlier side on the LEFT
+  const eorder={}; orderedEntries().forEach((o,i)=>eorder[o.e.id]=i);
+  const ord=e=>(eorder[e]===undefined?Infinity:eorder[e]);
+  const leftRight=m=> (ord(m.bId)<ord(m.aId)) ? [m.bId,m.aId] : [m.aId,m.bId];   // [leftId, rightId]
   const ordered=pending.slice().sort((m1,m2)=>{
     const bl1=(busy.has(m1.aId)||busy.has(m1.bId))?1:0, bl2=(busy.has(m2.aId)||busy.has(m2.bId))?1:0;
     if(bl1!==bl2) return bl1-bl2;                          // assignable now first
@@ -1048,7 +1052,8 @@ function renderBoard(){
         </div>`;
       }
       const opts=assignable.map(x=>{
-        const xa=entryById(x.aId), xb=entryById(x.bId);
+        const [lId,rId]=leftRight(x);                       // earlier team/entry on the left (match the queue)
+        const xa=entryById(lId), xb=entryById(rId);
         return `<option value="${x.id}">${typeName(x.type)}｜${esc(entryLabel(xa))}（${esc(entryTeamName(xa))}） vs ${esc(entryLabel(xb))}（${esc(entryTeamName(xb))}）</option>`;
       }).join("");
       return `<div class="ccard idle" ${dropAttr(c)}>
@@ -1088,16 +1093,14 @@ function renderBoard(){
     pl.innerHTML='<div class="muted small" style="padding:6px 2px">残っている試合はありません。</div>';
   } else {
     // residual list: shown in team & entry order (earlier team/entry on the left)
-    const eorder={}; orderedEntries().forEach((o,i)=>eorder[o.e.id]=i);
-    const ord=e=>(eorder[e]===undefined?Infinity:eorder[e]);
     const pendingOrdered=pending.slice().sort((m1,m2)=>{
       const lo1=Math.min(ord(m1.aId),ord(m1.bId)), lo2=Math.min(ord(m2.aId),ord(m2.bId));
       if(lo1!==lo2) return lo1-lo2;
       return Math.max(ord(m1.aId),ord(m1.bId)) - Math.max(ord(m2.aId),ord(m2.bId));
     });
     pl.innerHTML=pendingOrdered.map((m,i)=>{
-      let a=entryById(m.aId), b=entryById(m.bId);
-      if(ord(m.bId)<ord(m.aId)){ const t=a; a=b; b=t; }     // earlier team/entry on the left
+      const [lId,rId]=leftRight(m);
+      const a=entryById(lId), b=entryById(rId);             // earlier team/entry on the left
       const blocked=busy.has(m.aId)||busy.has(m.bId);
       return `<div class="plist-row ${blocked?'blocked':''}">
         <span class="num">${i+1}</span>
@@ -1824,11 +1827,4 @@ renderSetup();
 renderBoard();
 renderResult();
 applyExportButtons();
-// apply any remote update that was deferred while the user was typing a score
-document.addEventListener("focusout", ()=>{ if(_pendingRender){ _pendingRender=false; setTimeout(renderFromRemote,0); } });
-initCloud();
-</script>
-<!-- holds the cross table while printing it alone (A4 landscape); hidden on screen -->
-<div id="matrixPrintArea"></div>
-</body>
-</html>
+// apply any remote update that was deferred while the user was typing a sc
