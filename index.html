@@ -1827,4 +1827,11 @@ renderSetup();
 renderBoard();
 renderResult();
 applyExportButtons();
-// apply any remote update that was deferred while the user was typing a sc
+// apply any remote update that was deferred while the user was typing a score
+document.addEventListener("focusout", ()=>{ if(_pendingRender){ _pendingRender=false; setTimeout(renderFromRemote,0); } });
+initCloud();
+</script>
+<!-- holds the cross table while printing it alone (A4 landscape); hidden on screen -->
+<div id="matrixPrintArea"></div>
+</body>
+</html>
