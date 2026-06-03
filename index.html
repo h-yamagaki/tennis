@@ -1027,6 +1027,7 @@ function renderBoard(){
     }
     if(m){
       const a=entryById(m.aId), b=entryById(m.bId);
+      const sumOk = finalOk(parseInt(m.scoreA,10), parseInt(m.scoreB,10));
       return `<div class="ccard live" ${dropAttr(c)} draggable="true" ondragstart="dragStart(event,'${m.id}',${c})">
         <div class="ccard-head">${label}<span class="ty">${typeName(m.type)}</span><span class="drag-h" title="ドラッグでコート移動">⠿</span></div>
         <div class="ccard-body">
@@ -1036,11 +1037,11 @@ function renderBoard(){
             <div class="pl-row"><span class="tm">${esc(entryTeamName(b))}</span><span class="pl">${esc(entryLabel(b))}</span></div>
           </div>
           <div class="score-line">
-            <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="sa_${m.id}" value="${esc(m.scoreA)}" onchange="updateScore('${m.id}','A',this.value)" style="width:54px;text-align:center;font-weight:700;padding:8px">
+            <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="sa_${m.id}" value="${esc(m.scoreA)}" oninput="chkFinal('${m.id}')" onchange="updateScore('${m.id}','A',this.value)" style="width:54px;text-align:center;font-weight:700;padding:8px">
             <span class="dash">-</span>
-            <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="sb_${m.id}" value="${esc(m.scoreB)}" onchange="updateScore('${m.id}','B',this.value)" style="width:54px;text-align:center;font-weight:700;padding:8px">
+            <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="sb_${m.id}" value="${esc(m.scoreB)}" oninput="chkFinal('${m.id}')" onchange="updateScore('${m.id}','B',this.value)" style="width:54px;text-align:center;font-weight:700;padding:8px">
           </div>
-          <button class="btn" style="width:100%" onclick="finalizeMatch('${m.id}')">✓ 結果を登録して次の試合へ</button>
+          <button id="fin_${m.id}" class="btn" style="width:100%" onclick="finalizeMatch('${m.id}')" ${sumOk?'':'disabled'}>✓ 結果を登録して次の試合へ</button>
           ${manual?`<button class="btn ghost" style="width:100%;margin-top:6px" onclick="unassignMatch('${m.id}')">↩ 未割り当てに戻す</button>`:""}
           ${m.extra?`<button class="btn ghost" style="width:100%;margin-top:6px" onclick="delMatch('${m.id}')">🗑 この追加対戦を削除</button>`:""}
         </div>
@@ -1236,13 +1237,25 @@ function updateScore(id,side,val){
   }
 }
 
+/* valid finish = both numeric, not a tie, total 3–7, and one side is 3 or 4
+   (= a 5-game match ends at 3, a 7-game match ends at 4) */
+function finalOk(a,b){
+  return !isNaN(a)&&!isNaN(b)&&a>=0&&b>=0&&a!==b&&(a+b)>=3&&(a+b)<=7&&(a===3||a===4||b===3||b===4);
+}
+/* enable the finalize button only for a valid match-ending score */
+function chkFinal(id){
+  const sa=document.getElementById("sa_"+id), sb=document.getElementById("sb_"+id), btn=document.getElementById("fin_"+id);
+  if(!btn) return;
+  btn.disabled = !finalOk(parseInt(sa&&sa.value,10), parseInt(sb&&sb.value,10));
+}
+
 /* record the result of a playing match, then auto-assign the freed court */
 function finalizeMatch(id){
   const m=state.matches.find(x=>x.id===id); if(!m||m.status!=='playing') return;
   const sa=document.getElementById("sa_"+id), sb=document.getElementById("sb_"+id);
   const a=parseInt(sa?sa.value:m.scoreA,10), b=parseInt(sb?sb.value:m.scoreB,10);
   if(isNaN(a)||isNaN(b)||a<0||b<0){ alert("両方のスコアを入力してください。"); return; }
-  if(a===b){ alert("同点（引き分け）は登録できません。勝敗がつくスコアを入力してください。"); return; }
+  if(!finalOk(a,b)){ alert("登録できないスコアです。どちらかが 3 または 4・合計 3〜7・同点でない（5ゲーム／7ゲームマッチの終了スコア）にしてください。"); return; }
   m.scoreA=String(a); m.scoreB=String(b);
   m.status='done'; m.doneSeq=++state.clock;
   autoFillIfNeeded();
