@@ -53,6 +53,10 @@
   .pill.d{background:#fef3c7;color:#b45309}
   .tchip{display:inline-block;padding:3px 9px;border-radius:6px;font-weight:700;color:#111}  /* team-colored name chip */
   .empty{color:var(--muted);text-align:center;padding:30px;border:2px dashed var(--line);border-radius:10px}
+  /* collapsible panel headers */
+  h2.collap{cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px}
+  h2.collap .caret{margin-left:auto;font-size:13px;color:var(--muted);font-weight:700}
+  .panel-body.collapsed{display:none}
 
   /* team cards */
   .team{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:#fcfdff}
@@ -365,28 +369,34 @@
         <div class="courts" id="courts"></div>
       </div>
       <div class="panel" id="addMatchPanel" style="display:none">
-        <h2>追加の対戦を作る</h2>
-        <p class="muted small" style="margin-top:0">全試合終了後などに、<b>別チーム・同種別</b>の組み合わせで1試合だけ追加します。作成すると<b>空きコートへすぐ割り当て</b>ます（空きが無ければ残試合一覧へ）。勝敗は<b>成績・順位・対戦結果表に反映</b>されます。追加した対戦は、残試合一覧・コート・完了一覧の <b>🗑</b> で削除できます。</p>
-        <div class="row" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
-          <label class="fld" style="flex:1;min-width:150px;margin:0">エントリーA
-            <select id="addA" onchange="fillAddB()" style="width:100%"></select>
-          </label>
-          <span class="muted" style="padding-bottom:8px">vs</span>
-          <label class="fld" style="flex:1;min-width:150px;margin:0">エントリーB（別チーム・同種別）
-            <select id="addB" style="width:100%"></select>
-          </label>
-          <button class="btn" onclick="addExtraMatch()">＋ 追加</button>
+        <h2 class="collap" onclick="togglePanel(this)">追加の対戦を作る<span class="caret">▼</span></h2>
+        <div class="panel-body">
+          <p class="muted small" style="margin-top:0">全試合終了後などに、<b>別チーム・同種別</b>の組み合わせで1試合だけ追加します。作成すると<b>空きコートへすぐ割り当て</b>ます（空きが無ければ残試合一覧へ）。勝敗は<b>成績・順位・対戦結果表に反映</b>されます。追加した対戦は、残試合一覧・コート・完了一覧の <b>🗑</b> で削除できます。</p>
+          <div class="row" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
+            <label class="fld" style="flex:1;min-width:150px;margin:0">エントリーA
+              <select id="addA" onchange="fillAddB()" style="width:100%"></select>
+            </label>
+            <span class="muted" style="padding-bottom:8px">vs</span>
+            <label class="fld" style="flex:1;min-width:150px;margin:0">エントリーB（別チーム・同種別）
+              <select id="addB" style="width:100%"></select>
+            </label>
+            <button class="btn" onclick="addExtraMatch()">＋ 追加</button>
+          </div>
+          <div id="addMsg" class="small" style="margin-top:8px;color:var(--green);font-weight:700;min-height:1.2em"></div>
         </div>
-        <div id="addMsg" class="small" style="margin-top:8px;color:var(--green);font-weight:700;min-height:1.2em"></div>
       </div>
       <div class="panel">
-        <h2>残試合一覧 <span class="badge" id="pendingBadge"></span></h2>
-        <p class="muted small" style="margin-top:0">コートが空くと、ここから最適な1試合を自動でコートへ割り当てます（出場中の選手を含む試合は割り当てられません）。</p>
-        <div id="pendingList"></div>
+        <h2 class="collap" onclick="togglePanel(this)">残試合一覧 <span class="badge" id="pendingBadge"></span><span class="caret">▼</span></h2>
+        <div class="panel-body">
+          <p class="muted small" style="margin-top:0">コートが空くと、ここから最適な1試合を自動でコートへ割り当てます（出場中の選手を含む試合は割り当てられません）。</p>
+          <div id="pendingList"></div>
+        </div>
       </div>
       <div class="panel">
-        <h2>完了した試合 <span class="badge" id="doneBadge"></span></h2>
-        <div id="doneList"></div>
+        <h2 class="collap" onclick="togglePanel(this)">完了した試合 <span class="badge" id="doneBadge"></span><span class="caret">▼</span></h2>
+        <div class="panel-body">
+          <div id="doneList"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -1605,6 +1615,12 @@ function makeMatrixPdf(){
 /* ====================================================== */
 /*  Tabs & init                                           */
 /* ====================================================== */
+/* collapse/expand a panel by clicking its header */
+function togglePanel(h){
+  const body=h.parentElement && h.parentElement.querySelector(".panel-body"); if(!body) return;
+  const collapsed=body.classList.toggle("collapsed");
+  const c=h.querySelector(".caret"); if(c) c.textContent=collapsed?"▶":"▼";
+}
 function goTab(name){
   document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("active",b.dataset.tab===name));
   ["setup","board","result"].forEach(t=>{
@@ -1846,31 +1862,4 @@ function copyViewUrl(){
 function migrate(){
   if(state.clock===undefined) state.clock=0;
   if(state.assignMode===undefined) state.assignMode="auto";
-  if(state.courtMode===undefined) state.courtMode="normal";
-  if(!state.matches || !state.matches.length) return;
-  if(state.matches[0].status===undefined){
-    let seq=0;
-    state.matches.forEach(m=>{
-      const dn = m.scoreA!=="" && m.scoreB!=="" && !isNaN(+m.scoreA) && !isNaN(+m.scoreB);
-      if(dn){ m.status='done'; m.doneSeq=++seq; }
-      else  { m.status='pending'; m.court=null; m.doneSeq=null; }
-      delete m.round;
-    });
-    state.clock=seq;
-    autoFillIfNeeded();
-    save();
-  }
-}
-
-migrate();
-document.querySelectorAll("nav button").forEach(b=>b.addEventListener("click",()=>goTab(b.dataset.tab)));
-bindSettings();
-renderSetup();
-renderBoard();
-renderResult();
-applyExportButtons();
-// apply any remote update that was deferred while the user was typing a score
-document.addEventListener("focusout", ()=>{ if(_pendingRender){ _pendingRender=false; setTimeout(renderFromRemote,0); } });
-initCloud();
-</script>
-<!-- holds the cross table while printing
+  if(state.courtMode===un
