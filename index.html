@@ -1862,4 +1862,34 @@ function copyViewUrl(){
 function migrate(){
   if(state.clock===undefined) state.clock=0;
   if(state.assignMode===undefined) state.assignMode="auto";
-  if(state.courtMode===un
+  if(state.courtMode===undefined) state.courtMode="normal";
+  if(!state.matches || !state.matches.length) return;
+  if(state.matches[0].status===undefined){
+    let seq=0;
+    state.matches.forEach(m=>{
+      const dn = m.scoreA!=="" && m.scoreB!=="" && !isNaN(+m.scoreA) && !isNaN(+m.scoreB);
+      if(dn){ m.status='done'; m.doneSeq=++seq; }
+      else  { m.status='pending'; m.court=null; m.doneSeq=null; }
+      delete m.round;
+    });
+    state.clock=seq;
+    autoFillIfNeeded();
+    save();
+  }
+}
+
+migrate();
+document.querySelectorAll("nav button").forEach(b=>b.addEventListener("click",()=>goTab(b.dataset.tab)));
+bindSettings();
+renderSetup();
+renderBoard();
+renderResult();
+applyExportButtons();
+// apply any remote update that was deferred while the user was typing a score
+document.addEventListener("focusout", ()=>{ if(_pendingRender){ _pendingRender=false; setTimeout(renderFromRemote,0); } });
+initCloud();
+</script>
+<!-- holds the cross table while printing it alone (A4 landscape); hidden on screen -->
+<div id="matrixPrintArea"></div>
+</body>
+</html>
