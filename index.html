@@ -1054,7 +1054,7 @@ function renderBoard(){
       const opts=assignable.map(x=>{
         const [lId,rId]=leftRight(x);                       // earlier team/entry on the left (match the queue)
         const xa=entryById(lId), xb=entryById(rId);
-        return `<option value="${x.id}">${typeName(x.type)}｜${esc(entryLabel(xa))}（${esc(entryTeamName(xa))}） vs ${esc(entryLabel(xb))}（${esc(entryTeamName(xb))}）</option>`;
+        return `<option value="${x.id}">${typeBadge(x.type)}｜${esc(entryLabel(xa))}（${esc(entryTeamName(xa))}） vs ${esc(entryLabel(xb))}（${esc(entryTeamName(xb))}）</option>`;
       }).join("");
       return `<div class="ccard idle" ${dropAttr(c)}>
         <div class="ccard-head">${label}<span class="ty">割当待ち</span></div>
