@@ -103,9 +103,9 @@
   .pcourt{border:2px solid #94a3b8;border-radius:12px;padding:10px;background:#eef2f7}
   .pcourt-head{font-weight:800;color:#334155;margin-bottom:8px;display:flex;align-items:center;gap:8px}
   .pcourt-slots{display:flex;flex-direction:column;gap:10px}
-  .ccard-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#475569;color:#fff;font-weight:800}
+  .ccard-head{display:flex;align-items:center;gap:8px;padding:3px 12px;background:#475569;color:#fff;font-weight:800;font-size:13px}
   .ccard.idle .ccard-head{background:#94a3b8}
-  .ccard-head .ty{font-size:11px;background:rgba(255,255,255,.25);padding:1px 8px;border-radius:20px}
+  .ccard-head .ty{font-size:10px;background:rgba(255,255,255,.25);padding:1px 7px;border-radius:20px}
   .ccard-body{padding:12px}
   .ccard .pair{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
   .ccard .pl-row{display:flex;align-items:baseline;gap:8px}
@@ -115,6 +115,13 @@
   .ccard .pl-row.win .pl::after{content:" 🏆"}
   .ccard .score-line{display:flex;align-items:center;justify-content:center;gap:10px;margin:6px 0 12px}
   .ccard .vs-mid{font-size:11px;color:var(--muted);text-align:center;margin:2px 0}
+  /* one-line matchup: left pair left-aligned, right pair right-aligned (no "vs") */
+  .ccard .pair1{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:nowrap;
+                margin-bottom:8px;font-size:16px;overflow:hidden}
+  .ccard .pair1 .side1{display:flex;align-items:center;gap:5px;min-width:0}   /* shrink only if too long */
+  .ccard .pair1 .tinit{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;
+                       padding:0 4px;border-radius:5px;font-size:11px;font-weight:800;flex-shrink:0}
+  .ccard .pair1 .pl{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .idle-msg{color:var(--muted);text-align:center;padding:22px 8px;font-size:14px}
   .plist-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);
              border-radius:8px;margin-bottom:6px;font-size:14px;background:#fff}
@@ -500,6 +507,13 @@ function entryLabel(e){
   return e.players.filter(Boolean).join("・");
 }
 function entryTeamName(e){ const t=teamById(e.teamId); return t?t.name:""; }
+function teamInitial(tid){ const t=teamById(tid); const n=t?t.name:""; return Array.from(n)[0]||"?"; }
+/* compact matchup: one entry per line = [team-initial chip] full name */
+function pairChips(a,b){
+  const side=e=>{ const tc=teamColor(e.teamId);
+    return `<div class="side1"><span class="tinit" style="background:${tc};color:${contrastText(tc)}" title="${esc(entryTeamName(e))}">${esc(teamInitial(e.teamId))}</span><span class="pl">${esc(entryLabel(e))}</span></div>`; };
+  return `<div class="pair1">${side(a)}${side(b)}</div>`;
+}
 /* court layout. normal: 1 slot = 1 physical court. ouda(大宇陀): 2 slots share 1 court. */
 function isOuda(){ return state.courtMode==='ouda'; }
 function physCourtOf(slot){ return isOuda() ? Math.floor((slot-1)/2)+1 : slot; }
@@ -1011,11 +1025,7 @@ function renderBoard(){
         return `<div class="ccard live">
           <div class="ccard-head">${label}<span class="ty">${typeName(m.type)}</span></div>
           <div class="ccard-body">
-            <div class="pair">
-              <div class="pl-row"><span class="tm">${esc(entryTeamName(a))}</span><span class="pl">${esc(entryLabel(a))}</span></div>
-              <div class="vs-mid">vs</div>
-              <div class="pl-row"><span class="tm">${esc(entryTeamName(b))}</span><span class="pl">${esc(entryLabel(b))}</span></div>
-            </div>
+            ${pairChips(a,b)}
             <div class="score-line"><span style="font-weight:800;font-size:18px">${sc}</span></div>
           </div>
         </div>`;
@@ -1031,11 +1041,7 @@ function renderBoard(){
       return `<div class="ccard live" ${dropAttr(c)} draggable="true" ondragstart="dragStart(event,'${m.id}',${c})">
         <div class="ccard-head">${label}<span class="ty">${typeName(m.type)}</span><span class="drag-h" title="ドラッグでコート移動">⠿</span></div>
         <div class="ccard-body">
-          <div class="pair">
-            <div class="pl-row"><span class="tm">${esc(entryTeamName(a))}</span><span class="pl">${esc(entryLabel(a))}</span></div>
-            <div class="vs-mid">vs</div>
-            <div class="pl-row"><span class="tm">${esc(entryTeamName(b))}</span><span class="pl">${esc(entryLabel(b))}</span></div>
-          </div>
+          ${pairChips(a,b)}
           <div class="score-line">
             <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="sa_${m.id}" value="${esc(m.scoreA)}" oninput="chkFinal('${m.id}')" onchange="updateScore('${m.id}','A',this.value)" style="width:54px;text-align:center;font-weight:700;padding:8px">
             <span class="dash">-</span>
