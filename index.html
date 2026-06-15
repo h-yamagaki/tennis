@@ -367,10 +367,15 @@
       <div class="panel">
         <h2>コート <span class="badge" id="courtBadge"></span></h2>
         <div class="courts" id="courts"></div>
+        <div id="standbyWrap" style="display:none;margin-top:16px">
+          <h3 style="margin:0 0 4px;font-size:15px">まもなく割り当て（待機案内）<span class="badge" id="standbyBadge"></span></h3>
+          <p class="muted small" style="margin:0 0 8px">コートが空き次第、上から順に割り当てられる見込みです（出場・休憩・残試合数から予測。実際の進み方で前後します）。<span style="color:var(--red,#dc2626);font-weight:700">試合中</span>の注記が付くペアは、その試合を終えてから入ります。待機中のペアの準備にお使いください。</p>
+          <div id="standbyList"></div>
+        </div>
       </div>
       <div class="panel" id="addMatchPanel" style="display:none">
-        <h2 class="collap" onclick="togglePanel(this)">追加の対戦を作る<span class="caret">▼</span></h2>
-        <div class="panel-body">
+        <h2 class="collap" onclick="togglePanel(this)">追加の対戦を作る<span class="caret">▶</span></h2>
+        <div class="panel-body collapsed">
           <p class="muted small" style="margin-top:0">全試合終了後などに、<b>別チーム・同種別</b>の組み合わせで1試合だけ追加します。作成すると<b>空きコートへすぐ割り当て</b>ます（空きが無ければ残試合一覧へ）。勝敗は<b>成績・順位・対戦結果表に反映</b>されます。追加した対戦は、残試合一覧・コート・完了一覧の <b>🗑</b> で削除できます。</p>
           <div class="row" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
             <label class="fld" style="flex:1;min-width:150px;margin:0">エントリーA
@@ -386,8 +391,8 @@
         </div>
       </div>
       <div class="panel">
-        <h2 class="collap" onclick="togglePanel(this)">残試合一覧 <span class="badge" id="pendingBadge"></span><span class="caret">▼</span></h2>
-        <div class="panel-body">
+        <h2 class="collap" onclick="togglePanel(this)">残試合一覧 <span class="badge" id="pendingBadge"></span><span class="caret">▶</span></h2>
+        <div class="panel-body collapsed">
           <p class="muted small" style="margin-top:0">コートが空くと、ここから最適な1試合を自動でコートへ割り当てます（出場中の選手を含む試合は割り当てられません）。</p>
           <div id="pendingList"></div>
         </div>
@@ -910,6 +915,56 @@ function fillCourts(){
     load[physCourtOf(slot)]=(load[physCourtOf(slot)]||0)+1;
   }
 }
+/* ---- standby prediction ------------------------------------------------
+   Predict the order in which the remaining (pending) matches are most likely
+   to be assigned next, so waiting pairs can get ready. To match the live engine
+   EXACTLY (it uses a maximum matching, not a simple priority pick), we run the
+   real fillCourts on a deep CLONE of the state: finish the longest-running
+   playing match (frees one slot), run fillCourts, and record whatever it newly
+   assigns — repeat until we have `limit` matches. `_simAge` orders the finishes
+   (current matches by court, so court 1 finishes first; newly-assigned matches
+   finish after all current ones). It's still an estimate — the real finish
+   order shifts the sequence — but each single step mirrors what the engine does
+   when one court frees. */
+function predictAssignOrder(limit){
+  const pendingNow=state.matches.filter(m=>m.status==='pending');
+  if(!pendingNow.length) return [];
+  const real=state;                                          // swap the global state to a clone (no awaits → safe)
+  const predictedIds=[];
+  try{
+    const clone=JSON.parse(JSON.stringify(real));
+    state=clone;
+    let age=0;
+    clone.matches.filter(m=>m.status==='playing')
+      .sort((a,b)=>(a.court||0)-(b.court||0))
+      .forEach(m=>{ m._simAge=age++; });                     // current matches finish in court order
+    let nextAge=10000;                                       // newly-assigned matches finish after all current ones
+    // pre-fill any genuinely-empty slots first (their fill is imminent → first in line)
+    const before0=new Set(clone.matches.filter(m=>m.status==='playing').map(m=>m.id));
+    fillCourts();
+    clone.matches.filter(m=>m.status==='playing' && !before0.has(m.id))
+      .sort((a,b)=>(a.court||0)-(b.court||0))
+      .forEach(m=>{ m._simAge=nextAge++; if(predictedIds.length<limit) predictedIds.push(m.id); });
+    let guard=0, cap=clone.matches.length+5;
+    while(predictedIds.length<limit && guard++<cap){
+      const playing=clone.matches.filter(m=>m.status==='playing');
+      const pending=clone.matches.filter(m=>m.status==='pending');
+      if(!pending.length || !playing.length) break;          // nothing left to assign, or nobody to free a slot
+      // finish the longest-running match → opens exactly one slot
+      const victim=playing.reduce((a,b)=> (a._simAge||0)<=(b._simAge||0) ? a : b);
+      victim.status='done'; victim.court=null; victim.doneSeq=++clone.clock;
+      const before=new Set(clone.matches.filter(m=>m.status==='playing').map(m=>m.id));
+      fillCourts();                                          // authoritative fill of the freed slot
+      const newly=clone.matches.filter(m=>m.status==='playing' && !before.has(m.id))
+        .sort((a,b)=>(a.court||0)-(b.court||0));
+      newly.forEach(m=>{ m._simAge=nextAge++; if(predictedIds.length<limit) predictedIds.push(m.id); });
+    }
+  } finally { state=real; }
+  // map predicted ids back to the real match objects, preserving predicted order
+  const byId={}; real.matches.forEach(m=>{ byId[m.id]=m; });
+  return predictedIds.map(id=>byId[id]).filter(Boolean);
+}
+
 /* fill empty courts only when the assignment mode is automatic */
 /* In cloud (multi-admin) mode, court auto-fill is done authoritatively inside the
    push transaction (serialized → no double-booking), so we SKIP the local optimistic
@@ -1030,8 +1085,10 @@ function renderBoard(){
     const m=playing.find(x=>x.court===c);
     if(IS_VIEWER){                                         // read-only court card for participants
       if(m){
-        const a=entryById(m.aId), b=entryById(m.bId);
-        const sc=(m.scoreA!==""&&m.scoreB!=="")?`${esc(m.scoreA)} - ${esc(m.scoreB)}`:"試合中";
+        const [lId,rId]=leftRight(m);                       // earlier team/entry on the LEFT (match the lists)
+        const a=entryById(lId), b=entryById(rId);
+        const scL=(lId===m.aId)?m.scoreA:m.scoreB, scR=(lId===m.aId)?m.scoreB:m.scoreA;
+        const sc=(m.scoreA!==""&&m.scoreB!=="")?`${esc(scL)} - ${esc(scR)}`:"試合中";
         return `<div class="ccard live">
           <div class="ccard-head">${label}<span class="ty">${typeName(m.type)}</span></div>
           <div class="ccard-body">
@@ -1046,16 +1103,21 @@ function renderBoard(){
       </div>`;
     }
     if(m){
-      const a=entryById(m.aId), b=entryById(m.bId);
+      const [lId,rId]=leftRight(m);                         // earlier team/entry on the LEFT (match the lists)
+      const a=entryById(lId), b=entryById(rId);
       const sumOk = finalOk(parseInt(m.scoreA,10), parseInt(m.scoreB,10));
+      // score inputs stay bound to A=aId / B=bId; only their visual side follows leftRight
+      const inA=`<input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="sa_${m.id}" value="${esc(m.scoreA)}" onfocus="this.select()" oninput="chkFinal('${m.id}')" onchange="updateScore('${m.id}','A',this.value)" style="width:54px;text-align:center;font-weight:700;padding:8px">`;
+      const inB=`<input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="sb_${m.id}" value="${esc(m.scoreB)}" onfocus="this.select()" oninput="chkFinal('${m.id}')" onchange="updateScore('${m.id}','B',this.value)" style="width:54px;text-align:center;font-weight:700;padding:8px">`;
+      const leftIn=(lId===m.aId)?inA:inB, rightIn=(lId===m.aId)?inB:inA;
       return `<div class="ccard live" ${dropAttr(c)} draggable="true" ondragstart="dragStart(event,'${m.id}',${c})">
         <div class="ccard-head">${label}<span class="ty">${typeName(m.type)}</span><span class="drag-h" title="ドラッグでコート移動">⠿</span></div>
         <div class="ccard-body">
           ${pairChips(a,b)}
           <div class="score-line">
-            <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="sa_${m.id}" value="${esc(m.scoreA)}" onfocus="this.select()" oninput="chkFinal('${m.id}')" onchange="updateScore('${m.id}','A',this.value)" style="width:54px;text-align:center;font-weight:700;padding:8px">
+            ${leftIn}
             <span class="dash">-</span>
-            <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="sb_${m.id}" value="${esc(m.scoreB)}" onfocus="this.select()" oninput="chkFinal('${m.id}')" onchange="updateScore('${m.id}','B',this.value)" style="width:54px;text-align:center;font-weight:700;padding:8px">
+            ${rightIn}
           </div>
           <button id="fin_${m.id}" class="btn" style="width:100%" onclick="finalizeMatch('${m.id}')" ${sumOk?'':'disabled'}>✓ 結果を登録して次の試合へ</button>
           ${manual?`<button class="btn ghost" style="width:100%;margin-top:6px" onclick="unassignMatch('${m.id}')">↩ 未割り当てに戻す</button>`:""}
@@ -1107,6 +1169,31 @@ function renderBoard(){
   document.getElementById("courtBadge").textContent = isOuda()
     ? `${playing.length} / ${state.courtCount} 試合（${physCount()}コート）`
     : `${playing.length} / ${state.courtCount} 面 稼働`;
+  // ---- standby (next-up prediction) ----
+  const sbWrap=document.getElementById("standbyWrap"), sbList=document.getElementById("standbyList");
+  if(sbWrap && sbList){
+    const sbCount=Math.min(Math.max(1,state.courtCount),10);   // 同時試合数ぶん（最大10件）
+    const upNext=predictAssignOrder(sbCount);
+    if(upNext.length===0){
+      sbWrap.style.display="none";
+    } else {
+      sbWrap.style.display="";
+      document.getElementById("standbyBadge").textContent = `次の ${upNext.length} 試合`;
+      // a pair still on court now is tagged 試合中 (its match can only start once it finishes)
+      const playingTag='<span class="small" style="color:var(--red,#dc2626);font-weight:700;margin-left:4px">試合中</span>';
+      sbList.innerHTML=upNext.map((m,i)=>{
+        const [lId,rId]=leftRight(m);
+        const a=entryById(lId), b=entryById(rId);             // earlier team/entry on the left
+        const lTag=busy.has(lId)?playingTag:'', rTag=busy.has(rId)?playingTag:'';
+        return `<div class="plist-row">
+          <span class="num">${i+1}</span>
+          <span class="pill ${m.type==='singles'?'s':'d'}">${typeBadge(m.type)}</span>${m.extra?'<span class="pill" style="background:#fde68a;color:#92400e;border-color:#fde68a">追加</span>':''}
+          <span class="grow"><span class="tchip" style="background:${lightTint(teamColor(a.teamId))}" title="${esc(entryTeamName(a))}">${esc(entryLabel(a))}</span>${lTag} <span class="muted">vs</span> <span class="tchip" style="background:${lightTint(teamColor(b.teamId))}" title="${esc(entryTeamName(b))}">${esc(entryLabel(b))}</span>${rTag}</span>
+        </div>`;
+      }).join("");
+    }
+  }
+
   const pl=document.getElementById("pendingList");
   if(pending.length===0){
     pl.innerHTML='<div class="muted small" style="padding:6px 2px">残っている試合はありません。</div>';
@@ -1139,19 +1226,25 @@ function renderBoard(){
     dl.innerHTML='<div class="muted small" style="padding:6px 2px">まだ完了した試合はありません。</div>';
   } else {
     dl.innerHTML=doneList.map(m=>{
-      const a=entryById(m.aId), b=entryById(m.bId), w=winnerOf(m);
+      const [lId,rId]=leftRight(m);                         // earlier team/entry on the LEFT (match the lists)
+      const a=entryById(lId), b=entryById(rId), w=winnerOf(m);
+      const leftIsA=(lId===m.aId);
+      const wLeft=leftIsA?(w===1):(w===-1), wRight=leftIsA?(w===-1):(w===1);
+      const scL=leftIsA?m.scoreA:m.scoreB, scR=leftIsA?m.scoreB:m.scoreA;
+      const inL=`<input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="${esc(scL)}" onfocus="this.select()" onchange="updateScore('${m.id}','${leftIsA?'A':'B'}',this.value)" style="width:46px;text-align:center;padding:6px">`;
+      const inR=`<input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="${esc(scR)}" onfocus="this.select()" onchange="updateScore('${m.id}','${leftIsA?'B':'A'}',this.value)" style="width:46px;text-align:center;padding:6px">`;
       const scoreCell = IS_VIEWER
-        ? `<span class="score" style="font-weight:700">${esc(m.scoreA)} - ${esc(m.scoreB)}</span>`
+        ? `<span class="score" style="font-weight:700">${esc(scL)} - ${esc(scR)}</span>`
         : `<span class="score">
-             <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="${esc(m.scoreA)}" onfocus="this.select()" onchange="updateScore('${m.id}','A',this.value)" style="width:46px;text-align:center;padding:6px">
+             ${inL}
              <span class="dash">-</span>
-             <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="${esc(m.scoreB)}" onfocus="this.select()" onchange="updateScore('${m.id}','B',this.value)" style="width:46px;text-align:center;padding:6px">
+             ${inR}
            </span>`;
       return `<div class="done-row">
         <span class="pill ${m.type==='singles'?'s':'d'}">${typeBadge(m.type)}</span>${m.extra?'<span class="pill" style="background:#fde68a;color:#92400e;border-color:#fde68a">追加</span>':''}
-        <span class="grow"><span style="${w===1?'color:var(--green);font-weight:700':''}">${w===1?'🏆 ':''}${esc(entryLabel(a))}</span>
+        <span class="grow"><span style="${wLeft?'color:var(--green);font-weight:700':''}">${wLeft?'🏆 ':''}${esc(entryLabel(a))}</span>
           <span class="muted">vs</span>
-          <span style="${w===-1?'color:var(--green);font-weight:700':''}">${w===-1?'🏆 ':''}${esc(entryLabel(b))}</span></span>
+          <span style="${wRight?'color:var(--green);font-weight:700':''}">${wRight?'🏆 ':''}${esc(entryLabel(b))}</span></span>
         ${scoreCell}
         ${IS_VIEWER?"":`<button class="btn ghost small" style="padding:6px 10px" onclick="undoMatch('${m.id}')">↩ 戻す</button>`}
         ${m.extra && !IS_VIEWER ? `<button class="icon" title="この追加対戦を削除" onclick="delMatch('${m.id}')">🗑</button>`:''}
@@ -1713,7 +1806,11 @@ async function cloudOverwrite(){
 function renderFromRemote(){
   const a=document.activeElement;
   if(a && a.tagName==='INPUT' && (String(a.id).indexOf('sa_')===0 || String(a.id).indexOf('sb_')===0)){ _pendingRender=true; return; }
+  // preserve focus across the re-render: a re-render rebuilds the whole board, so an
+  // element the user just TABbed to (e.g. the fin_<id> register button) would lose focus
+  const focusId=(a && a.id)?a.id:null;
   renderSetup(); renderBoard(); renderResult();
+  if(focusId){ const el=document.getElementById(focusId); if(el){ try{ el.focus(); }catch(_){} } }
 }
 async function cloudPullOnce(){               // admin: load an existing event once on open
   if(!db) return false;
