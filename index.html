@@ -524,6 +524,13 @@ function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;",
 
 /* ---------- model helpers ---------- */
 function teamById(id){ return state.teams.find(t=>t.id===id); }
+/* 混成チーム: team.mixOf = [構成元チームID…]. 混成チームとその構成元クラブは
+   「味方扱い」で対戦させない（同一チーム同士も当然対戦しない）。 */
+function alliedTeams(t1,t2){
+  if(t1===t2) return true;
+  const A=teamById(t1), B=teamById(t2);
+  return !!(A && A.mixOf && A.mixOf.indexOf(t2)>=0) || !!(B && B.mixOf && B.mixOf.indexOf(t1)>=0);
+}
 function entryById(id){ return state.entries.find(e=>e.id===id); }
 function entryLabel(e){
   if(!e) return "?";
@@ -596,6 +603,8 @@ function renderSetup(){
           <div class="team-head">
             <input type="color" class="team-color" title="チーム色を変更" value="${color}" onchange="setTeamColor('${t.id}',this.value)">
             <input type="text" value="${esc(t.name)}" onchange="renameTeam('${t.id}',this.value)">
+            <button class="icon" title="上へ移動" onclick="moveTeam('${t.id}',-1)" ${ti===0?'disabled':''}>▲</button>
+            <button class="icon" title="下へ移動" onclick="moveTeam('${t.id}',1)" ${ti===state.teams.length-1?'disabled':''}>▼</button>
             <button class="icon" title="チーム削除" onclick="delTeam('${t.id}')">🗑</button>
           </div>
           ${entryHtml}
@@ -613,6 +622,15 @@ function renderSetup(){
             <textarea id="bulk_${t.id}" rows="3" class="bulk-ta" placeholder="例）&#10;山田太郎&#10;鈴木一郎, 佐藤次郎"></textarea>
             <button class="btn sec" style="margin-top:6px" onclick="addBulk('${t.id}')">この内容で一括追加</button>
           </details>
+          ${state.teams.length>1?`
+          <details style="margin-top:8px" ${(t.mixOf&&t.mixOf.length)?'open':''}>
+            <summary class="small muted" style="cursor:pointer">混成チーム設定（対戦しない構成元クラブ）${(t.mixOf&&t.mixOf.length)?` <span class="rem">混成 ${t.mixOf.length}</span>`:''}</summary>
+            <div class="small" style="padding:6px 2px 2px">
+              <p class="muted" style="margin:0 0 4px">このチームが<b>混成チーム</b>のとき、選手の<b>元のクラブ</b>にチェックしてください。チェックしたチームのペアとは<b>対戦しません</b>（味方扱い）。色・順位はチームごとに別々です。</p>
+              ${state.teams.filter(o=>o.id!==t.id).map(o=>`<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 12px 2px 0">
+                <input type="checkbox" ${(t.mixOf&&t.mixOf.indexOf(o.id)>=0)?'checked':''} onchange="toggleMix('${t.id}','${o.id}',this.checked)"> ${esc(o.name)}</label>`).join("")}
+            </div>
+          </details>`:''}
         </div>`;
     }).join("");
   }
@@ -651,6 +669,16 @@ function addTeam(){
 function renameTeam(id,val){
   const t=teamById(id); if(t){ t.name=val.trim()||t.name; save(); }
 }
+/* reorder teams (dir=-1 up / +1 down). Display order, entry order, default colors,
+   標準色 follow this; explicit team colors are stored per team so they don't change. */
+function moveTeam(id,dir){
+  const i=state.teams.findIndex(t=>t.id===id); if(i<0) return;
+  const j=i+dir;
+  if(j<0 || j>=state.teams.length) return;
+  const a=state.teams;
+  const tmp=a[i]; a[i]=a[j]; a[j]=tmp;
+  save(); renderSetup();
+}
 function setTeamColor(id,val){
   const t=teamById(id); if(t){ t.color=val; save(); renderResult(); }
 }
@@ -659,6 +687,22 @@ function delTeam(id){
   if(!confirm("このチームを削除しますか？" + (ent?`（エントリー ${ent} 件も削除されます）`:""))) return;
   state.teams = state.teams.filter(t=>t.id!==id);
   state.entries = state.entries.filter(e=>e.teamId!==id);
+  state.teams.forEach(t=>{ if(t.mixOf) t.mixOf=t.mixOf.filter(x=>x!==id); });  // drop deleted team from 混成設定
+  save(); renderSetup();
+}
+/* toggle a constituent club for a 混成チーム (no rebuild: takes effect on next 生成).
+   The relationship is mutual, so we set it on BOTH teams and re-render so the other
+   team's checkbox reflects it too. */
+function toggleMix(tid,oid,on){
+  const setMix=(ta,tb)=>{
+    const t=teamById(ta); if(!t) return;
+    t.mixOf=t.mixOf||[];
+    const i=t.mixOf.indexOf(tb);
+    if(on){ if(i<0) t.mixOf.push(tb); } else if(i>=0){ t.mixOf.splice(i,1); }
+    if(!t.mixOf.length) delete t.mixOf;
+  };
+  setMix(tid,oid);
+  setMix(oid,tid);                 // keep both sides in sync
   save(); renderSetup();
 }
 function addEntry(tid){
@@ -801,7 +845,7 @@ function countMatches(){
   let s=0,d=0;
   const es=state.entries;
   for(let i=0;i<es.length;i++)for(let j=i+1;j<es.length;j++){
-    if(es[i].type===es[j].type && es[i].teamId!==es[j].teamId){
+    if(es[i].type===es[j].type && !alliedTeams(es[i].teamId,es[j].teamId)){
       if(es[i].type==="singles") s++; else d++;
     }
   }
@@ -825,7 +869,7 @@ function buildMatches(){
   const es=state.entries, ms=[];
   for(let i=0;i<es.length;i++)for(let j=i+1;j<es.length;j++){
     const a=es[i], b=es[j];
-    if(a.type===b.type && a.teamId!==b.teamId){
+    if(a.type===b.type && !alliedTeams(a.teamId,b.teamId)){
       ms.push({id:uid("m"), type:a.type, aId:a.id, bId:b.id,
                status:"pending", court:null, doneSeq:null, scoreA:"", scoreB:""});
     }
@@ -1272,7 +1316,7 @@ function entryOpt(e){ return `<option value="${esc(e.id)}">${esc(entryLabel(e))}
 function renderAddMatch(){
   const panel=document.getElementById("addMatchPanel"); if(!panel) return;
   // hidden for viewers, and until at least one valid opponent pairing exists
-  const hasPair=state.entries.some(a=>state.entries.some(b=>a.id!==b.id && a.type===b.type && a.teamId!==b.teamId));
+  const hasPair=state.entries.some(a=>state.entries.some(b=>a.id!==b.id && a.type===b.type && !alliedTeams(a.teamId,b.teamId)));
   if(IS_VIEWER || !state.generated || !hasPair){ panel.style.display="none"; return; }
   panel.style.display="";
   const selA=document.getElementById("addA"), prevA=selA.value;
@@ -1284,7 +1328,7 @@ function fillAddB(){
   const selA=document.getElementById("addA"), selB=document.getElementById("addB");
   if(!selA||!selB) return;
   const a=entryById(selA.value); const prevB=selB.value;
-  const opts=a ? state.entries.filter(e=>e.id!==a.id && e.type===a.type && e.teamId!==a.teamId) : [];
+  const opts=a ? state.entries.filter(e=>e.id!==a.id && e.type===a.type && !alliedTeams(e.teamId,a.teamId)) : [];
   selB.innerHTML=opts.length ? opts.map(entryOpt).join("") : `<option value="">（相手なし）</option>`;
   if(prevB && opts.some(e=>e.id===prevB)) selB.value=prevB;
 }
@@ -1314,7 +1358,7 @@ function addExtraMatch(){
   if(!a||!b){ alert("追加する2つのエントリーを選んでください。"); return; }
   if(a.id===b.id){ alert("同じエントリー同士は対戦できません。"); return; }
   if(a.type!==b.type){ alert("同じ種別（シングルス／ダブルス）同士で組んでください。"); return; }
-  if(a.teamId===b.teamId){ alert("別チーム同士で組んでください。"); return; }
+  if(alliedTeams(a.teamId,b.teamId)){ alert("別チーム同士で組んでください（混成チームと構成元クラブは対戦できません）。"); return; }
   const m={id:uid("m"), type:a.type, aId:a.id, bId:b.id, extra:true,
            status:"pending", court:null, doneSeq:null, scoreA:"", scoreB:""};
   state.matches.push(m);
@@ -1427,8 +1471,17 @@ function computeStats(){
   return {teams,entries};
 }
 
-/* standings comparator (win, then goal-difference, then goals-for) */
-function standCmp(a,b){ return b.win-a.win || (b.gf-b.ga)-(a.gf-a.ga) || b.gf-a.gf; }
+/* win rate (= 勝 / 試合数). 0 matches → 0 so they sort last among equals */
+function winRate(s){ return s.played>0 ? s.win/s.played : 0; }
+function winPct(s){ return s.played>0 ? (Math.round(s.win/s.played*1000)/10)+"%" : "—"; }
+/* standings comparator: win RATE first, then goal-difference, then goals-for */
+function standCmp(a,b){
+  const ra=winRate(a), rb=winRate(b);
+  if(rb!==ra) return rb-ra;
+  const da=a.gf-a.ga, db=b.gf-b.ga;
+  if(db!==da) return db-da;
+  return b.gf-a.gf;
+}
 /* competition ranking (1224): tied rows share the same rank */
 function assignRanks(sortedStats){
   const ranks=[];
@@ -1448,12 +1501,12 @@ function renderResult(){
   const trows=state.teams.map(t=>({t, s:teams[t.id]}))
     .sort((x,y)=> standCmp(x.s,y.s));
   const tranks=assignRanks(trows.map(r=>r.s));
-  let th=`<thead><tr><th>順位</th><th class="name" style="text-align:left">チーム</th><th>試合</th><th>勝</th><th>敗</th><th>分</th><th>取得G</th><th>失G</th><th>G差</th></tr></thead><tbody>`;
+  let th=`<thead><tr><th>順位</th><th class="name" style="text-align:left">チーム</th><th>試合</th><th>勝</th><th>敗</th><th>分</th><th>勝率</th><th>取得G</th><th>失G</th><th>G差</th></tr></thead><tbody>`;
   th+=trows.map((r,i)=>{
     const s=r.s, diff=s.gf-s.ga, bg=lightTint(teamColor(r.t.id));
     return `<tr style="background:${bg}"><td class="rk">${tranks[i]}</td>
       <td class="name">${esc(r.t.name)}</td><td>${s.played}</td><td>${s.win}</td><td>${s.lose}</td>
-      <td>${s.draw}</td><td>${s.gf}</td><td>${s.ga}</td><td>${diff>0?'+':''}${diff}</td></tr>`;
+      <td>${s.draw}</td><td>${winPct(s)}</td><td>${s.gf}</td><td>${s.ga}</td><td>${diff>0?'+':''}${diff}</td></tr>`;
   }).join("");
   th+=`</tbody>`;
   document.getElementById("teamTable").innerHTML=th;
@@ -1464,13 +1517,13 @@ function renderResult(){
   const erows=state.entries.map(e=>({e, s:entries[e.id]}))
     .sort((x,y)=> standCmp(x.s,y.s) || (eorder[x.e.id]-eorder[y.e.id]));
   const eranks=assignRanks(erows.map(r=>r.s));
-  let eh=`<thead><tr><th>順位</th><th class="name" style="text-align:left">エントリー</th><th>チーム</th><th>種別</th><th>試合</th><th>残</th><th>勝</th><th>敗</th><th>分</th><th>取得G</th><th>失G</th></tr></thead><tbody>`;
+  let eh=`<thead><tr><th>順位</th><th class="name" style="text-align:left">エントリー</th><th>チーム</th><th>種別</th><th>試合</th><th>残</th><th>勝</th><th>敗</th><th>分</th><th>勝率</th><th>取得G</th><th>失G</th></tr></thead><tbody>`;
   eh+=erows.map((r,i)=>{
     const s=r.s, bg=lightTint(teamColor(r.e.teamId));
     return `<tr style="background:${bg}"><td class="rk">${eranks[i]}</td>
       <td class="name">${esc(entryLabel(r.e))}</td><td>${esc(entryTeamName(r.e))}</td>
       <td><span class="pill ${r.e.type==='singles'?'s':'d'}">${r.e.type==='singles'?'シングルス':'ダブルス'}</span></td>
-      <td>${s.played}</td><td class="rem-cell">${rem[r.e.id]||0}</td><td>${s.win}</td><td>${s.lose}</td><td>${s.draw}</td><td>${s.gf}</td><td>${s.ga}</td></tr>`;
+      <td>${s.played}</td><td class="rem-cell">${rem[r.e.id]||0}</td><td>${s.win}</td><td>${s.lose}</td><td>${s.draw}</td><td>${winPct(s)}</td><td>${s.gf}</td><td>${s.ga}</td></tr>`;
   }).join("");
   eh+=`</tbody>`;
   document.getElementById("entryTable").innerHTML=eh;
