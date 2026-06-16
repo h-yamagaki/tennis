@@ -382,7 +382,7 @@
         </div>
       </div>
       <div class="panel">
-        <h2 style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">コート <span class="badge" id="courtBadge"></span><span id="courtTimeInfo" class="small" style="margin-left:auto;font-weight:700;white-space:nowrap"></span></h2>
+        <h2 id="courtHead" style="display:flex;align-items:center;flex-wrap:nowrap;gap:6px">コート <span class="badge" id="courtBadge" style="flex-shrink:0"></span><span id="courtTimeInfo" class="small" style="margin-left:auto;font-weight:700;white-space:nowrap;flex-shrink:0"></span></h2>
         <div class="courts" id="courts"></div>
         <div id="standbyWrap" style="display:none;margin-top:16px">
           <h3 style="margin:0 0 4px;font-size:15px">まもなく割り当て（待機案内）<span class="badge" id="standbyBadge"></span></h3>
@@ -1124,6 +1124,12 @@ function updateCourtTime(){
   else { remTxt=`終了時刻を ${-remMin}分 超過`; col="var(--red,#dc2626)"; }
   el.innerHTML = `<span class="muted">終了</span> ${fmtTime(state.endAt)} <span style="color:${col}">（${remTxt}）</span>`;
   el.style.display = "";
+  // on narrow screens, shrink the text so the header stays on a single line
+  const head=document.getElementById("courtHead");
+  if(head){
+    let fs=13; el.style.fontSize=fs+"px";
+    while(head.scrollWidth>head.clientWidth && fs>9){ fs-=0.5; el.style.fontSize=fs+"px"; }
+  }
 }
 function renderBoard(){
   const empty=document.getElementById("boardEmpty"), content=document.getElementById("boardContent");
@@ -2123,6 +2129,7 @@ function migrate(){
 
 migrate();
 setInterval(updateCourtTime, 30000);   // keep the remaining-time countdown fresh
+window.addEventListener("resize", updateCourtTime);   // re-fit on rotate/resize
 document.querySelectorAll("nav button").forEach(b=>b.addEventListener("click",()=>goTab(b.dataset.tab)));
 bindSettings();
 renderSetup();
