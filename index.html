@@ -61,8 +61,9 @@
   /* team cards */
   .team{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:#fcfdff}
   .team-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
-  .team-head input{font-weight:700;font-size:15px;flex:1;min-width:120px}
-  .team-color{width:32px;height:26px;border:1px solid var(--line);border-radius:6px;padding:0;
+  .team-head input[type="text"]{font-weight:700;font-size:15px;flex:1;min-width:0}
+  .team-head>.icon{flex-shrink:0}
+  .team-color{width:28px;height:26px;border:1px solid var(--line);border-radius:6px;padding:0;
               flex-shrink:0;cursor:pointer;background:#fff}
   .entry{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);
          border-radius:8px;background:#fff;margin-bottom:6px;font-size:14px}
@@ -301,6 +302,16 @@
           <input type="text" id="eventTitle" placeholder="例：2026-01-11 練習試合対戦表" style="width:100%">
         </div>
       </div>
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label class="fld">開始日時</label>
+          <input type="datetime-local" id="startAt" style="min-width:210px">
+        </div>
+        <div>
+          <label class="fld">終了日時</label>
+          <input type="datetime-local" id="endAt" style="min-width:210px">
+        </div>
+      </div>
       <p class="muted small" id="courtModeHint" style="margin:10px 0 0"></p>
     </div>
 
@@ -371,7 +382,7 @@
         </div>
       </div>
       <div class="panel">
-        <h2>コート <span class="badge" id="courtBadge"></span></h2>
+        <h2 style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">コート <span class="badge" id="courtBadge"></span><span id="courtTimeInfo" class="small" style="margin-left:auto;font-weight:700;white-space:nowrap"></span></h2>
         <div class="courts" id="courts"></div>
         <div id="standbyWrap" style="display:none;margin-top:16px">
           <h3 style="margin:0 0 4px;font-size:15px">まもなく割り当て（待機案内）<span class="badge" id="standbyBadge"></span></h3>
@@ -511,7 +522,7 @@ function lightTint(hex){
 }
 
 function defaultState(){
-  return { seq:1, teams:[], entries:[], courtCount:2, title:"", assignMode:"auto", courtMode:"normal",
+  return { seq:1, teams:[], entries:[], courtCount:2, title:"", startAt:"", endAt:"", assignMode:"auto", courtMode:"normal",
            matches:[], clock:0, generated:false };
 }
 let state = load() || defaultState();
@@ -565,6 +576,8 @@ function matchCounts(){
 function renderSetup(){
   document.getElementById("courtCount").value = state.courtCount;
   document.getElementById("eventTitle").value = state.title || "";
+  document.getElementById("startAt").value = state.startAt || "";
+  document.getElementById("endAt").value = state.endAt || "";
   document.getElementById("courtMode").value = state.courtMode || "normal";
   document.getElementById("courtCountLabel").textContent = isOuda() ? "同時試合数（コート×2）" : "コート数（面）";
   document.getElementById("courtModeHint").innerHTML = isOuda()
@@ -826,6 +839,14 @@ function bindSettings(){
     state.title=this.value; save();
     if(document.getElementById("matrixTitle")) renderResult();
   });
+  document.getElementById("startAt").addEventListener("change",function(){
+    state.startAt=this.value; save();
+    if(document.getElementById("courts")) renderBoard();
+  });
+  document.getElementById("endAt").addEventListener("change",function(){
+    state.endAt=this.value; save();
+    if(document.getElementById("courts")) renderBoard();
+  });
   document.getElementById("courtMode").addEventListener("change",function(){
     state.courtMode = this.value==='ouda' ? 'ouda' : 'normal';
     if(state.generated){
@@ -1080,6 +1101,30 @@ function winnerOf(m){
 function typeBadge(t){ return t==='singles'?'S':'D'; }
 function typeName(t){ return t==='singles'?'シングルス':'ダブルス'; }
 
+function fmtTime(s){
+  if(!s) return "";
+  const d=new Date(s); if(isNaN(d.getTime())) return "";
+  const p=n=>String(n).padStart(2,"0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function updateCourtTime(){
+  const el=document.getElementById("courtTimeInfo");
+  if(!el) return;
+  const end = state.endAt ? new Date(state.endAt) : null;
+  if(!end || isNaN(end.getTime())){ el.style.display="none"; el.textContent=""; return; }
+  const start = state.startAt ? new Date(state.startAt) : null;
+  const now = new Date().getTime();
+  // before the start time passes, count down from the full duration (end − start);
+  // afterwards, count down from now.
+  const fromTime = (start && !isNaN(start.getTime()) && now < start.getTime()) ? start.getTime() : now;
+  const remMin = Math.ceil((end.getTime() - fromTime) / 60000);
+  let remTxt, col;
+  if(remMin>0){ remTxt=`残り ${remMin}分`; col=remMin<=15?"var(--red,#dc2626)":"var(--green,#16a34a)"; }
+  else if(remMin===0){ remTxt="まもなく終了"; col="var(--red,#dc2626)"; }
+  else { remTxt=`終了時刻を ${-remMin}分 超過`; col="var(--red,#dc2626)"; }
+  el.innerHTML = `<span class="muted">終了</span> ${fmtTime(state.endAt)} <span style="color:${col}">（${remTxt}）</span>`;
+  el.style.display = "";
+}
 function renderBoard(){
   const empty=document.getElementById("boardEmpty"), content=document.getElementById("boardContent");
   if(!state.generated || state.matches.length===0){
@@ -1224,6 +1269,7 @@ function renderBoard(){
   document.getElementById("courtBadge").textContent = isOuda()
     ? `${playing.length} / ${state.courtCount} 試合（${physCount()}コート）`
     : `${playing.length} / ${state.courtCount} 面 稼働`;
+  updateCourtTime();
   // ---- standby (next-up prediction) ----
   const sbWrap=document.getElementById("standbyWrap"), sbList=document.getElementById("standbyList");
   if(sbWrap && sbList){
@@ -1827,7 +1873,7 @@ function mergeStates(baseStr, local, remote){
     // else: local had it unchanged & remote removed it → drop
   });
   N.matches=matches;
-  ["teams","entries","courtCount","title","assignMode","courtMode","generated"].forEach(k=>{
+  ["teams","entries","courtCount","title","startAt","endAt","assignMode","courtMode","generated"].forEach(k=>{
     const lc = base ? str(local[k])!==str(base[k]) : true;
     N[k] = lc ? clone(local[k]) : remote[k];
   });
@@ -2058,6 +2104,8 @@ function migrate(){
   if(state.clock===undefined) state.clock=0;
   if(state.assignMode===undefined) state.assignMode="auto";
   if(state.courtMode===undefined) state.courtMode="normal";
+  if(state.startAt===undefined) state.startAt="";
+  if(state.endAt===undefined) state.endAt="";
   if(!state.matches || !state.matches.length) return;
   if(state.matches[0].status===undefined){
     let seq=0;
@@ -2074,6 +2122,7 @@ function migrate(){
 }
 
 migrate();
+setInterval(updateCourtTime, 30000);   // keep the remaining-time countdown fresh
 document.querySelectorAll("nav button").forEach(b=>b.addEventListener("click",()=>goTab(b.dataset.tab)));
 bindSettings();
 renderSetup();
