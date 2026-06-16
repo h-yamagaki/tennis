@@ -1119,10 +1119,10 @@ function updateCourtTime(){
   const fromTime = (start && !isNaN(start.getTime()) && now < start.getTime()) ? start.getTime() : now;
   const remMin = Math.ceil((end.getTime() - fromTime) / 60000);
   let remTxt, col;
-  if(remMin>0){ remTxt=`残り ${remMin}分`; col=remMin<=15?"var(--red,#dc2626)":"var(--green,#16a34a)"; }
+  if(remMin>0){ remTxt=`残${remMin}分`; col=remMin<=15?"var(--red,#dc2626)":"var(--green,#16a34a)"; }
   else if(remMin===0){ remTxt="まもなく終了"; col="var(--red,#dc2626)"; }
-  else { remTxt=`終了時刻を ${-remMin}分 超過`; col="var(--red,#dc2626)"; }
-  el.innerHTML = `<span class="muted">終了</span> ${fmtTime(state.endAt)} <span style="color:${col}">（${remTxt}）</span>`;
+  else { remTxt=`${-remMin}分超過`; col="var(--red,#dc2626)"; }
+  el.innerHTML = `<span class="muted">終了</span> ${fmtTime(state.endAt)} <span style="color:${col}">${remTxt}</span>`;
   el.style.display = "";
   // on narrow screens, shrink the text so the header stays on a single line
   const head=document.getElementById("courtHead");
