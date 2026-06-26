@@ -289,6 +289,7 @@
 <body>
 <header>
   <h1>🎾 対戦割当・結果登録</h1>
+  <div id="roomLabel" class="sub"></div>
 </header>
 <nav>
   <button data-tab="setup" class="active">① 設定・メンバー</button>
@@ -582,12 +583,12 @@ function entryLabel(e){
   if(!e) return "?";
   return e.players.filter(Boolean).join("・");
 }
-function entryTeamName(e){ const t=teamById(e.teamId); return t?t.name:""; }
+function entryTeamName(e){ const t=e?teamById(e.teamId):null; return t?t.name:""; }
 function teamInitial(tid){ const t=teamById(tid); const n=t?t.name:""; return Array.from(n)[0]||"?"; }
 /* compact matchup: one entry per line = [team-initial chip] full name */
 function pairChips(a,b){
-  const side=e=>{ const tc=teamColor(e.teamId);
-    return `<div class="side1"><span class="tinit" style="background:${tc};color:${contrastText(tc)}" title="${esc(entryTeamName(e))}">${esc(teamInitial(e.teamId))}</span><span class="pl">${esc(entryLabel(e))}</span></div>`; };
+  const side=e=>{ const tid=e?e.teamId:null; const tc=teamColor(tid);
+    return `<div class="side1"><span class="tinit" style="background:${tc};color:${contrastText(tc)}" title="${esc(entryTeamName(e))}">${esc(teamInitial(tid))}</span><span class="pl">${esc(entryLabel(e))}</span></div>`; };
   return `<div class="pair1">${side(a)}${side(b)}</div>`;
 }
 /* court layout. normal: 1 slot = 1 physical court. ouda(大宇陀): 2 slots share 1 court. */
@@ -1175,10 +1176,13 @@ function renderBoard(){
   }
   empty.style.display="none"; content.style.display="";
 
-  const total=state.matches.length;
-  const done=state.matches.filter(m=>m.status==='done').length;
-  const playing=state.matches.filter(m=>m.status==='playing');
-  const pending=state.matches.filter(m=>m.status==='pending');
+  // 削除済みエントリーを参照する壊れた試合は表示から除外（描画クラッシュ防止）
+  const validM=m=>!!(entryById(m.aId) && entryById(m.bId));
+  const renderable=state.matches.filter(validM);
+  const total=renderable.length;
+  const done=renderable.filter(m=>m.status==='done').length;
+  const playing=renderable.filter(m=>m.status==='playing');
+  const pending=renderable.filter(m=>m.status==='pending');
   const pct = total? Math.round(done/total*100):0;
   document.getElementById("statBox").innerHTML = `
     <div class="stat"><div class="n">${done}/${total}</div><div class="l">完了した試合</div></div>
@@ -1317,7 +1321,7 @@ function renderBoard(){
   const sbWrap=document.getElementById("standbyWrap"), sbList=document.getElementById("standbyList");
   if(sbWrap && sbList){
     const sbCount=Math.min(Math.max(1,state.courtCount),10);   // 同時試合数ぶん（最大10件）
-    const upNext=predictAssignOrder(sbCount);
+    const upNext=predictAssignOrder(sbCount).filter(validM);
     if(upNext.length===0){
       sbWrap.style.display="none";
     } else {
@@ -1364,7 +1368,7 @@ function renderBoard(){
   document.getElementById("pendingBadge").textContent = `残り ${pending.length}`;
 
   // ---- completed matches (latest first) ----
-  const doneList=state.matches.filter(m=>m.status==='done').sort((a,b)=>(b.doneSeq||0)-(a.doneSeq||0));
+  const doneList=state.matches.filter(m=>m.status==='done' && validM(m)).sort((a,b)=>(b.doneSeq||0)-(a.doneSeq||0));
   const dl=document.getElementById("doneList");
   if(doneList.length===0){
     dl.innerHTML='<div class="muted small" style="padding:6px 2px">まだ完了した試合はありません。</div>';
@@ -1963,7 +1967,7 @@ function renderFromRemote(){
   // preserve focus across the re-render: a re-render rebuilds the whole board, so an
   // element the user just TABbed to (e.g. the fin_<id> register button) would lose focus
   const focusId=(a && a.id)?a.id:null;
-  renderSetup(); renderBoard(); renderResult();
+  safeRenderAll();
   if(focusId){ const el=document.getElementById(focusId); if(el){ try{ el.focus(); }catch(_){} } }
 }
 async function cloudPullOnce(){               // admin: load an existing event once on open
@@ -1974,10 +1978,18 @@ async function cloudPullOnce(){               // admin: load an existing event o
     return false;
   }catch(e){ setCloudStatus("off","⚠ 取得失敗"); return false; }
 }
+/* render all three tabs, isolating each so a failure in one (e.g. renderBoard)
+   can't stop the others — otherwise a viewer on the 成績 tab could stay blank
+   until a manual tab switch re-rendered it. */
+function safeRenderAll(){
+  try{ renderSetup(); }catch(e){ console.error("renderSetup failed", e); }
+  try{ renderBoard(); }catch(e){ console.error("renderBoard failed", e); }
+  try{ renderResult(); }catch(e){ console.error("renderResult failed", e); }
+}
 function applyRemote(d){
   state=Object.assign(defaultState(), d);
   _baseline=JSON.stringify(state);
-  renderSetup(); renderBoard(); renderResult();
+  safeRenderAll();
   if(IS_VIEWER) setCloudStatus("view","👁 閲覧モード（自動更新）");
 }
 /* admins also subscribe live, merging other admins' changes into local state */
@@ -2007,6 +2019,12 @@ function subscribeViewer(){                    // realtime: pushes current + eve
     err=>{ setCloudStatus("view","⚠ 接続エラー"); }
   );
 }
+/* show the current room + mode in the header so a wrong link is immediately visible */
+function updateRoomLabel(){
+  const el=document.getElementById("roomLabel"); if(!el) return;
+  const mode = IS_VIEWER ? "閲覧モード" : (IS_ENTRY ? "得点入力モード" : "管理モード");
+  el.textContent = `ルーム：${ROOM}（${mode}）`;
+}
 function enterViewerMode(){
   document.body.classList.add("viewer");
   document.querySelectorAll('nav button[data-tab="setup"]').forEach(b=>{ b.style.display="none"; });
@@ -2016,6 +2034,7 @@ function enterViewerMode(){
     d.textContent="閲覧モード：結果は自動で更新されます（編集はできません）";
     const h=document.querySelector("header"); if(h) h.insertAdjacentElement("afterend", d);
   }
+  updateRoomLabel();
   goTab("result");
 }
 /* score-entry (helper) mode: a restricted admin that can ONLY operate tab ②
@@ -2030,6 +2049,7 @@ function enterEntryMode(){
     d.textContent="得点入力モード：②対戦・コート割当 の操作のみできます（設定の変更はできません）";
     const h=document.querySelector("header"); if(h) h.insertAdjacentElement("afterend", d);
   }
+  updateRoomLabel();
   goTab("board");
 }
 function showViewerError(){
@@ -2311,6 +2331,9 @@ function migrate(){
 }
 
 migrate();
+// 戻る/進む・タブ復元で「前に開いた別ルームの管理画面」が bfcache から復活するのを防ぐ。
+// 復元時はURLに合わせて作り直すため強制リロードする。
+window.addEventListener("pageshow", function(e){ if(e.persisted){ location.reload(); } });
 if(IS_ROOMS){
   // 登録ルーム一覧モード: 通常アプリは起動せず、一覧だけ表示する
   enterRoomsMode();
@@ -2319,6 +2342,7 @@ if(IS_ROOMS){
   window.addEventListener("resize", updateCourtTime);   // re-fit on rotate/resize
   document.querySelectorAll("nav button").forEach(b=>b.addEventListener("click",()=>goTab(b.dataset.tab)));
   bindSettings();
+  updateRoomLabel();
   renderSetup();
   renderBoard();
   renderResult();
