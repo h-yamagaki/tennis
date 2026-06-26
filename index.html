@@ -65,6 +65,19 @@
   .team-head>.icon{flex-shrink:0}
   .team-color{width:28px;height:26px;border:1px solid var(--line);border-radius:6px;padding:0;
               flex-shrink:0;cursor:pointer;background:#fff}
+  .room-card{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid var(--line);
+             border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#fcfdff}
+  .room-card .room-main{flex:1;min-width:180px}
+  .room-card .room-name{font-weight:800;font-size:16px;word-break:break-all}
+  .room-card .room-title{font-size:13px;color:var(--primary);font-weight:700;margin-top:2px}
+  .room-card .room-meta{margin-top:4px;line-height:1.6}
+  .room-card .btn{flex-shrink:0}
+  .modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;
+                 align-items:center;justify-content:center;z-index:9999;padding:18px}
+  .modal-box{background:#fff;border-radius:14px;padding:20px 22px;max-width:420px;width:100%;
+             box-shadow:0 18px 50px rgba(0,0,0,.25)}
+  .modal-box .modal-msg{font-size:15px;line-height:1.7;white-space:pre-line;color:#1f2937}
+  .modal-box .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
   .entry{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);
          border-radius:8px;background:#fff;margin-bottom:6px;font-size:14px}
   .entry>.pill,.entry>.rem,.entry>.icon{flex-shrink:0}      /* keep badges/buttons intact */
@@ -450,6 +463,20 @@
       </div>
     </div>
   </section>
+
+  <!-- ===== ROOMS (登録ルーム一覧) ===== -->
+  <section id="tab-rooms" style="display:none">
+    <div class="panel">
+      <h2>登録ルーム一覧</h2>
+      <p class="muted small" style="margin-top:0">クラウドに登録されている大会（ルーム）の一覧です。「管理ページを開く」で各ルームの管理画面に移動します。</p>
+      <div class="row" style="margin:10px 0">
+        <input id="newRoomInput" type="text" placeholder="新しい大会名（例：2026-06-08-練習試合）" style="flex:1;min-width:200px">
+        <button class="btn" onclick="openRoomFromList()">このルームを開く／新規作成</button>
+        <button class="btn ghost" onclick="renderRoomList()">🔄 一覧を更新</button>
+      </div>
+      <div id="roomListBox"></div>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -477,6 +504,8 @@ const ROOM = (_qs.get("room") || "default").slice(0,60);
 let IS_VIEWER = _qs.get("view") === "1";
 // 得点入力モード（係員用）: ②対戦・コート割当 の操作だけできる制限つき管理モード
 let IS_ENTRY = _qs.get("entry") === "1" && !IS_VIEWER;
+// 登録ルーム一覧モード: クラウドのイベント一覧を表示し、管理ページへ移動する
+const IS_ROOMS = _qs.get("rooms") === "1";
 const cloudConfigured = !!(FIREBASE.apiKey && FIREBASE.projectId);
 if(!cloudConfigured) IS_VIEWER = false;        // no creds → local app; ignore view param
 const cloudEnabled = cloudConfigured && !!window.firebase;
@@ -1118,6 +1147,8 @@ function updateCourtTime(){
   // afterwards, count down from now.
   const fromTime = (start && !isNaN(start.getTime()) && now < start.getTime()) ? start.getTime() : now;
   const remMin = Math.ceil((end.getTime() - fromTime) / 60000);
+  // hide once overtime exceeds 1 hour (avoids huge overtime on past events)
+  if(remMin < -60){ el.style.display="none"; el.textContent=""; return; }
   let remTxt, col;
   if(remMin>0){ remTxt=`残${remMin}分`; col=remMin<=15?"var(--red,#dc2626)":"var(--green,#16a34a)"; }
   else if(remMin===0){ remTxt="まもなく終了"; col="var(--red,#dc2626)"; }
@@ -2073,8 +2104,9 @@ function renderShare(){
       <div class="row">
         <input id="roomInput" type="text" placeholder="例：2026-06-08-練習試合" value="${esc(ROOM)}" style="flex:1;min-width:180px">
         <button class="btn" onclick="openRoom()">この大会を開く</button>
+        <button class="btn ghost" onclick="gotoRoomList()">📋 登録ルーム一覧</button>
       </div>
-      <p class="muted small" style="margin:8px 0 0">同じ名前なら続きから、新しい名前なら<b>白紙の新しい大会</b>として開きます（大会ごとに別データ・別の閲覧URL）。選手構成を引き継ぎたいときは、先に「データのバックアップ」で書き出し → 新しい大会で読み込み。</p>
+      <p class="muted small" style="margin:8px 0 0">同じ名前なら続きから、新しい名前なら<b>白紙の新しい大会</b>として開きます（大会ごとに別データ・別の閲覧URL）。選手構成を引き継ぎたいときは、先に「データのバックアップ」で書き出し → 新しい大会で読み込み。<br>「📋 登録ルーム一覧」で、登録済みの全大会を一覧から選んで開けます。</p>
     </div>`;
 }
 function openRoom(){
@@ -2082,6 +2114,122 @@ function openRoom(){
   if(!v){ alert("大会名（部屋名）を入力してください。"); return; }
   const u=new URL(location.href);
   u.searchParams.set("room", v);
+  u.searchParams.delete("view");
+  u.searchParams.delete("entry");
+  location.href=u.toString();
+}
+/* navigate to the registered-rooms list page */
+function gotoRoomList(){
+  const u=new URL(location.href);
+  u.searchParams.set("rooms","1");
+  u.searchParams.delete("view");
+  u.searchParams.delete("entry");
+  location.href=u.toString();
+}
+
+/* ===== 登録ルーム一覧 ============================================ */
+function fmtYMDHM(s){
+  if(!s) return "";
+  const d=new Date(s); if(isNaN(d.getTime())) return "";
+  const p=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function enterRoomsMode(){
+  const nav=document.querySelector("nav"); if(nav) nav.style.display="none";
+  ["tab-setup","tab-board","tab-result"].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display="none"; });
+  const rs=document.getElementById("tab-rooms"); if(rs) rs.style.display="";
+  document.querySelector("header h1").textContent="🎾 登録ルーム一覧";
+  renderRoomList();
+}
+function roomCardHtml(r){
+  const base=location.origin+location.pathname;
+  const adminUrl=`${base}?room=${encodeURIComponent(r.id)}`;
+  const meta=[];
+  if(r.startAt||r.endAt){
+    const sa=fmtYMDHM(r.startAt), ea=fmtYMDHM(r.endAt);
+    meta.push(`日時：${sa||"—"} 〜 ${ea||"—"}`);
+  }
+  meta.push(r.generated?"対戦表：生成済み":"対戦表：未生成");
+  meta.push(`チーム ${r.teams} ／ エントリー ${r.entries}`);
+  if(r.updated) meta.push(`最終更新：${fmtYMDHM(r.updated)}`);
+  const encId=encodeURIComponent(r.id);
+  return `<div class="room-card">
+    <div class="room-main">
+      <div class="room-name">${esc(r.id)}</div>
+      ${r.title?`<div class="room-title">${esc(r.title)}</div>`:""}
+      <div class="room-meta small muted">${meta.map(esc).join("<br>")}</div>
+    </div>
+    <button class="btn" onclick="location.href='${esc(adminUrl)}'">管理ページを開く →</button>
+    <button class="btn ghost" onclick="deleteRoom('${encId}')" title="このルームを削除">🗑 削除</button>
+  </div>`;
+}
+/* in-app confirmation modal — works where native confirm() is suppressed (LINE/WebView/standalone) */
+function showConfirm(message, onOk, okLabel){
+  const ov=document.getElementById("confirmModal");
+  const ok=document.getElementById("confirmOk"), cancel=document.getElementById("confirmCancel");
+  if(!ov||!ok||!cancel){ if(window.confirm(message)) onOk(); return; }   // fallback
+  document.getElementById("confirmMsg").textContent=message;
+  ok.textContent=okLabel||"OK";
+  const close=()=>{ ov.style.display="none"; ok.onclick=null; cancel.onclick=null; };
+  ok.onclick=()=>{ close(); onOk(); };
+  cancel.onclick=close;
+  ov.onclick=(e)=>{ if(e.target===ov) close(); };   // tap outside to cancel
+  ov.style.display="flex";
+}
+async function deleteRoom(encId){
+  const id=decodeURIComponent(encId);
+  if(!cloudEnabled || !db){ alert("クラウド未接続のため削除できません。"); return; }
+  showConfirm(
+    `ルーム「${id}」を削除します。\nこの大会のデータ（対戦表・スコアなど）は完全に消え、元に戻せません。\nよろしいですか？`,
+    async ()=>{
+      try{
+        await db.collection("events").doc(id).delete();
+        renderRoomList();
+      }catch(e){
+        alert("削除に失敗しました：" + ((e&&e.message)||e));
+      }
+    },
+    "削除する"
+  );
+}
+async function renderRoomList(){
+  const box=document.getElementById("roomListBox"); if(!box) return;
+  if(!cloudEnabled || !db){
+    box.innerHTML='<div class="empty">クラウド未接続のため、登録ルームの一覧を取得できません。<br>通信環境をご確認ください。</div>';
+    return;
+  }
+  box.innerHTML='<div class="muted small" style="padding:10px 2px">読み込み中…</div>';
+  try{
+    let snap;
+    try{ snap=await db.collection("events").orderBy("updatedAt","desc").get(); }
+    catch(e){ snap=await db.collection("events").get(); }   // index/field 無しでも一覧は出す
+    const rows=[];
+    snap.forEach(doc=>{
+      const wrap=doc.data()||{}; const d=wrap.data||{};
+      rows.push({
+        id:doc.id,
+        title:d.title||"",
+        startAt:d.startAt||"",
+        endAt:d.endAt||"",
+        generated:!!d.generated,
+        teams:(d.teams||[]).length,
+        entries:(d.entries||[]).length,
+        updated:wrap.updatedAt||0
+      });
+    });
+    rows.sort((a,b)=>(b.updated||0)-(a.updated||0));
+    if(rows.length===0){ box.innerHTML='<div class="empty">登録されているルームがありません。</div>'; return; }
+    box.innerHTML=rows.map(roomCardHtml).join("");
+  }catch(e){
+    box.innerHTML='<div class="empty">一覧の取得に失敗しました。<br>'+esc(String((e&&e.message)||e))+'</div>';
+  }
+}
+function openRoomFromList(){
+  const v=(document.getElementById("newRoomInput").value||"").trim();
+  if(!v){ alert("大会名（ルーム名）を入力してください。"); return; }
+  const u=new URL(location.href);
+  u.searchParams.set("room", v);
+  u.searchParams.delete("rooms");
   u.searchParams.delete("view");
   u.searchParams.delete("entry");
   location.href=u.toString();
@@ -2128,22 +2276,37 @@ function migrate(){
 }
 
 migrate();
-setInterval(updateCourtTime, 30000);   // keep the remaining-time countdown fresh
-window.addEventListener("resize", updateCourtTime);   // re-fit on rotate/resize
-document.querySelectorAll("nav button").forEach(b=>b.addEventListener("click",()=>goTab(b.dataset.tab)));
-bindSettings();
-renderSetup();
-renderBoard();
-renderResult();
-applyExportButtons();
-// apply any remote update that was deferred while the user was typing a score
-document.addEventListener("focusout", ()=>{ if(_pendingRender){ _pendingRender=false; setTimeout(renderFromRemote,0); } });
-initCloud();
-// initCloud may demote a failed-password admin to viewer (synchronously, before its
-// first await), so re-check IS_VIEWER here before applying the entry-mode UI lock.
-if(IS_ENTRY && !IS_VIEWER) enterEntryMode();
+if(IS_ROOMS){
+  // 登録ルーム一覧モード: 通常アプリは起動せず、一覧だけ表示する
+  enterRoomsMode();
+} else {
+  setInterval(updateCourtTime, 30000);   // keep the remaining-time countdown fresh
+  window.addEventListener("resize", updateCourtTime);   // re-fit on rotate/resize
+  document.querySelectorAll("nav button").forEach(b=>b.addEventListener("click",()=>goTab(b.dataset.tab)));
+  bindSettings();
+  renderSetup();
+  renderBoard();
+  renderResult();
+  applyExportButtons();
+  // apply any remote update that was deferred while the user was typing a score
+  document.addEventListener("focusout", ()=>{ if(_pendingRender){ _pendingRender=false; setTimeout(renderFromRemote,0); } });
+  initCloud();
+  // initCloud may demote a failed-password admin to viewer (synchronously, before its
+  // first await), so re-check IS_VIEWER here before applying the entry-mode UI lock.
+  if(IS_ENTRY && !IS_VIEWER) enterEntryMode();
+}
 </script>
 <!-- holds the cross table while printing it alone (A4 landscape); hidden on screen -->
 <div id="matrixPrintArea"></div>
+<!-- in-app confirmation dialog (native confirm() is unreliable in some mobile/in-app browsers) -->
+<div id="confirmModal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div id="confirmMsg" class="modal-msg"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="confirmCancel">キャンセル</button>
+      <button class="btn" id="confirmOk">OK</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
