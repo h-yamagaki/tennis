@@ -72,6 +72,9 @@
   .room-card .room-title{font-size:13px;color:var(--primary);font-weight:700;margin-top:2px}
   .room-card .room-meta{margin-top:4px;line-height:1.6}
   .room-card .btn{flex-shrink:0}
+  .lock-badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;
+              background:#fee2e2;color:#b91c1c;vertical-align:middle;margin-left:4px}
+  .lock-badge.open{background:#dcfce7;color:#15803d}
   .modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;
                  align-items:center;justify-content:center;z-index:9999;padding:18px}
   .modal-box{background:#fff;border-radius:14px;padding:20px 22px;max-width:420px;width:100%;
@@ -552,7 +555,7 @@ function lightTint(hex){
 
 function defaultState(){
   return { seq:1, teams:[], entries:[], courtCount:2, title:"", startAt:"", endAt:"", assignMode:"auto", courtMode:"normal",
-           matches:[], clock:0, generated:false };
+           matches:[], clock:0, generated:false, locked:false };
 }
 let state = load() || defaultState();
 _baseline = JSON.stringify(state);            // last state known to match the cloud (for 3-way merge)
@@ -1981,6 +1984,7 @@ function subscribeAdmin(){
     snap=>{
       if(!snap.exists) return;
       const d=snap.data(); if(!d || !d.data) return;
+      if(d.data.locked){ if(_unsub){ _unsub(); _unsub=null; } location.reload(); return; }  // locked elsewhere → re-open read-only
       const remote=Object.assign(defaultState(), d.data);
       state=mergeStates(_baseline, state, remote);   // keep our un-pushed edits, take theirs
       _baseline=JSON.stringify(remote);
@@ -2051,6 +2055,14 @@ async function initCloud(){
   }
   setCloudStatus("on","☁ 接続中…");
   const got=await cloudPullOnce();
+  if(got && state.locked){
+    // この大会は編集ロック中 → 管理者でも閲覧のみ（読み取り専用）にする
+    IS_VIEWER=true;
+    enterViewerMode();
+    subscribeViewer();
+    setCloudStatus("view","🔒 編集ロック中（閲覧のみ）");
+    return;
+  }
   if(!got){
     // brand-new room → start as a fresh event (do NOT carry over the previous one)
     state=defaultState();
@@ -2153,15 +2165,33 @@ function roomCardHtml(r){
   meta.push(`チーム ${r.teams} ／ エントリー ${r.entries}`);
   if(r.updated) meta.push(`最終更新：${fmtYMDHM(r.updated)}`);
   const encId=encodeURIComponent(r.id);
+  const lockBadge = r.locked
+    ? `<span class="lock-badge">🔒 編集禁止</span>`
+    : `<span class="lock-badge open">✏ 編集可</span>`;
+  const lockBtn = r.locked
+    ? `<button class="btn sec" onclick="toggleRoomLock('${encId}',false)" title="編集できるようにする">🔓 編集を許可</button>`
+    : `<button class="btn ghost" onclick="toggleRoomLock('${encId}',true)" title="編集できないようにする">🔒 編集を禁止</button>`;
+  const openLabel = r.locked ? "閲覧する →" : "管理ページを開く →";
   return `<div class="room-card">
     <div class="room-main">
-      <div class="room-name">${esc(r.id)}</div>
+      <div class="room-name">${esc(r.id)} ${lockBadge}</div>
       ${r.title?`<div class="room-title">${esc(r.title)}</div>`:""}
       <div class="room-meta small muted">${meta.map(esc).join("<br>")}</div>
     </div>
-    <button class="btn" onclick="location.href='${esc(adminUrl)}'">管理ページを開く →</button>
+    <button class="btn" onclick="location.href='${esc(adminUrl)}'">${openLabel}</button>
+    ${lockBtn}
     <button class="btn ghost" onclick="deleteRoom('${encId}')" title="このルームを削除">🗑 削除</button>
   </div>`;
+}
+async function toggleRoomLock(encId, lock){
+  const id=decodeURIComponent(encId);
+  if(!cloudEnabled || !db){ alert("クラウド未接続のため変更できません。"); return; }
+  try{
+    await db.collection("events").doc(id).update({ "data.locked": !!lock });
+    renderRoomList();
+  }catch(e){
+    alert("変更に失敗しました：" + ((e&&e.message)||e));
+  }
 }
 /* in-app confirmation modal — works where native confirm() is suppressed (LINE/WebView/standalone) */
 function showConfirm(message, onOk, okLabel){
@@ -2212,6 +2242,7 @@ async function renderRoomList(){
         startAt:d.startAt||"",
         endAt:d.endAt||"",
         generated:!!d.generated,
+        locked:!!d.locked,
         teams:(d.teams||[]).length,
         entries:(d.entries||[]).length,
         updated:wrap.updatedAt||0
@@ -2260,6 +2291,7 @@ function migrate(){
   if(state.courtMode===undefined) state.courtMode="normal";
   if(state.startAt===undefined) state.startAt="";
   if(state.endAt===undefined) state.endAt="";
+  if(state.locked===undefined) state.locked=false;
   if(!state.matches || !state.matches.length) return;
   if(state.matches[0].status===undefined){
     let seq=0;
