@@ -732,12 +732,19 @@ function setTeamColor(id,val){
   const t=teamById(id); if(t){ t.color=val; save(); renderResult(); }
 }
 function delTeam(id){
-  const ent = state.entries.filter(e=>e.teamId===id).length;
-  if(!confirm("このチームを削除しますか？" + (ent?`（エントリー ${ent} 件も削除されます）`:""))) return;
+  const teamEntryIds = state.entries.filter(e=>e.teamId===id).map(e=>e.id);
+  const refd = state.matches.filter(m=>teamEntryIds.includes(m.aId)||teamEntryIds.includes(m.bId));
+  const ent = teamEntryIds.length;
+  const extra = ent ? `（エントリー ${ent} 件` + (refd.length?`・関連する試合 ${refd.length} 件`:"") + `も削除されます）` : "";
+  if(!confirm("このチームを削除しますか？" + extra)) return;
   state.teams = state.teams.filter(t=>t.id!==id);
   state.entries = state.entries.filter(e=>e.teamId!==id);
+  // 削除エントリーを参照する試合も除去（orphan試合を残さない＝コート描画クラッシュ防止）
+  state.matches = state.matches.filter(m=>!teamEntryIds.includes(m.aId) && !teamEntryIds.includes(m.bId));
   state.teams.forEach(t=>{ if(t.mixOf) t.mixOf=t.mixOf.filter(x=>x!==id); });  // drop deleted team from 混成設定
-  save(); renderSetup();
+  save();
+  if(refd.length && cloudAdmin()) cloudOverwrite();   // 構造変更はドキュメント全体を上書き
+  renderSetup(); renderBoard(); renderResult();
 }
 /* toggle a constituent club for a 混成チーム (no rebuild: takes effect on next 生成).
    The relationship is mutual, so we set it on BOTH teams and re-render so the other
@@ -765,8 +772,19 @@ function addEntry(tid){
   save(); renderSetup();
 }
 function delEntry(id){
+  const refd = state.matches.filter(m=>m.aId===id||m.bId===id);
+  if(refd.length){
+    const done = refd.filter(m=>m.status==='done').length;
+    if(!confirm(`このエントリーを削除します。関連する試合 ${refd.length} 件`
+      + (done?`（うち結果入力済み ${done} 件）`:"")
+      + `も削除され、コート割当・成績から取り除かれます。よろしいですか？`)) return;
+  }
   state.entries = state.entries.filter(e=>e.id!==id);
-  save(); renderSetup();
+  // 削除エントリーを参照する試合も除去（orphan試合を残さない＝コート描画クラッシュ防止）
+  state.matches = state.matches.filter(m=>m.aId!==id && m.bId!==id);
+  save();
+  if(refd.length && cloudAdmin()) cloudOverwrite();   // 構造変更はドキュメント全体を上書き
+  renderSetup(); renderBoard(); renderResult();
 }
 function setEntryPlayer(id,idx,val){
   const e=entryById(id); if(!e) return;
@@ -1093,10 +1111,11 @@ function assignToCourt(c){
   const sel=document.getElementById("sel_court_"+c); if(!sel) return;
   const m=state.matches.find(x=>x.id===sel.value);
   if(!m || m.status!=='pending'){ alert("選択した対戦は割り当てできません。"); renderBoard(); return; }
+  const valid=x=>!!(entryById(x.aId) && entryById(x.bId));   // 壊れた(削除済み参照)試合は無視
   const busy=new Set();
-  state.matches.filter(x=>x.status==='playing').forEach(x=>{ busy.add(x.aId); busy.add(x.bId); });
+  state.matches.filter(x=>x.status==='playing' && valid(x)).forEach(x=>{ busy.add(x.aId); busy.add(x.bId); });
   if(busy.has(m.aId)||busy.has(m.bId)){ alert("選択した対戦の選手は現在出場中です。別の対戦を選んでください。"); renderBoard(); return; }
-  if(state.matches.some(x=>x.status==='playing' && x.court===c)){ alert("このコートは現在使用中です。"); renderBoard(); return; }
+  if(state.matches.some(x=>x.status==='playing' && x.court===c && valid(x))){ alert("このコートは現在使用中です。"); renderBoard(); return; }
   m.status='playing'; m.court=c;
   save(); renderBoard();
 }
@@ -2087,12 +2106,23 @@ async function initCloud(){
     return;
   }
   if(!got){
-    // brand-new room → start as a fresh event (do NOT carry over the previous one)
+    // brand-new (or just-deleted) room → start a fresh event LOCALLY only.
+    // Do NOT write an empty doc to the cloud here — otherwise merely opening a
+    // deleted room's link would resurrect it as an empty room. The doc is created
+    // lazily on the first real change (save → cloudPush creates it).
     state=defaultState();
     _baseline=JSON.stringify(state);
     localStorage.setItem(KEY, JSON.stringify(state));
     renderSetup(); renderBoard(); renderResult();
-    await cloudOverwrite();
+  } else {
+    // 削除済みエントリーを参照する壊れた試合（orphan）を自動で掃除。
+    // 残っていると描画クラッシュや「選手出場中」誤判定で手動割当が詰まるため。
+    const n0=state.matches.length;
+    state.matches=state.matches.filter(m=>entryById(m.aId) && entryById(m.bId));
+    if(state.matches.length!==n0){
+      renderSetup(); renderBoard(); renderResult();
+      await cloudOverwrite();
+    }
   }
   subscribeAdmin();                          // live-sync with other admin devices
   setCloudStatus("on","☁ 管理モード（自動保存・複数人同時OK）");
